@@ -1,0 +1,1 @@
+savedcmd_better_hello.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-7.0.0-30-generic/scripts/module.lds -o better_hello.ko better_hello.o better_hello.mod.o .module-common.o
