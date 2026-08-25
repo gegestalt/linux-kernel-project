@@ -1,1 +1,0 @@
-savedcmd_register_cdev.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-7.0.0-30-generic/scripts/module.lds -o register_cdev.ko register_cdev.o register_cdev.mod.o .module-common.o

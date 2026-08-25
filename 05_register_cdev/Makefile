@@ -1,10 +1,9 @@
 obj-m += register_cdev.o
 
-KDIR := /lib/modules/$(shell uname -r)/build
-PWD := $(shell pwd)
+.PHONY: all clean
 
 all:
-	$(MAKE) -C $(KDIR) M="$(PWD)" modules
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(CURDIR) modules
 
-mclean:
-	$(MAKE) -C $(KDIR) M="$(PWD)" clean
+clean:
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(CURDIR) clean
