@@ -16,19 +16,16 @@
  */
 static int major;
 
-
 /*
  * Time at which the module was loaded.
  */
 static u64 loaded_at_ns;
-
 
 /*
  * Number of currently open file descriptors referring
  * to our character device.
  */
 static atomic_t open_count = ATOMIC_INIT(0);
-
 
 /*
  * Called when userspace opens a device node whose
@@ -49,20 +46,19 @@ static int register_cdev_open(
     count = atomic_inc_return(&open_count);
 
     pr_info(
-        DEVICE_NAME
-        ": open: dev=%u:%u ctx=%s[%d] inode=%p file=%p opens=%d\n",
-        imajor(inode),
-        iminor(inode),
-        current->comm,
-        current->pid,
-        inode,
-        file,
-        count
+	DEVICE_NAME
+	": open: dev=%u:%u ctx=%s[%d] inode=%p file=%p opens=%d\n",
+	imajor(inode),
+	iminor(inode),
+	current->comm,
+	current->pid,
+	inode,
+	file,
+	count
     );
 
     return 0;
 }
-
 
 /*
  * Called when userspace reads from our device.
@@ -95,7 +91,6 @@ static ssize_t register_cdev_read(
 
     unsigned int minor;
 
-
     /*
      * Determine which minor number was opened.
      *
@@ -103,7 +98,6 @@ static ssize_t register_cdev_read(
      * with this open file.
      */
     minor = iminor(file_inode(file));
-
 
     /*
      * Construct data inside KERNEL MEMORY.
@@ -113,20 +107,19 @@ static ssize_t register_cdev_read(
      * executing process.
      */
     message_length = scnprintf(
-        message,
-        sizeof(message),
+	message,
+	sizeof(message),
 
-        "register_cdev kernel device\n"
-        "major=%d\n"
-        "minor=%u\n"
-        "context=%s[%d]\n",
+	"register_cdev kernel device\n"
+	"major=%d\n"
+	"minor=%u\n"
+	"context=%s[%d]\n",
 
-        major,
-        minor,
-        current->comm,
-        current->pid
+	major,
+	minor,
+	current->comm,
+	current->pid
     );
-
 
     /*
      * If userspace has already consumed the entire
@@ -139,8 +132,7 @@ static ssize_t register_cdev_read(
      * eventually stop reading.
      */
     if (*offset >= message_length)
-        return 0;
-
+	return 0;
 
     /*
      * Determine how many bytes we can copy.
@@ -148,8 +140,7 @@ static ssize_t register_cdev_read(
     bytes_to_copy = message_length - *offset;
 
     if (bytes_to_copy > count)
-        bytes_to_copy = count;
-
+	bytes_to_copy = count;
 
     /*
      * Copy data from KERNEL MEMORY
@@ -159,36 +150,31 @@ static ssize_t register_cdev_read(
      * pointer.
      */
     if (copy_to_user(
-            buffer,
-            message + *offset,
-            bytes_to_copy
-        )) {
-
-        return -EFAULT;
+	    buffer,
+	    message + *offset,
+	    bytes_to_copy
+	)) {
+	return -EFAULT;
     }
-
 
     /*
      * Advance the file position.
      */
     *offset += bytes_to_copy;
 
-
     pr_info(
-        DEVICE_NAME
-        ": read: dev=%d:%u bytes=%zu offset=%lld ctx=%s[%d]\n",
-        major,
-        minor,
-        bytes_to_copy,
-        *offset,
-        current->comm,
-        current->pid
+	DEVICE_NAME
+	": read: dev=%d:%u bytes=%zu offset=%lld ctx=%s[%d]\n",
+	major,
+	minor,
+	bytes_to_copy,
+	*offset,
+	current->comm,
+	current->pid
     );
-
 
     return bytes_to_copy;
 }
-
 
 /*
  * Called when the userspace process closes its
@@ -204,18 +190,17 @@ static int register_cdev_release(
     count = atomic_dec_return(&open_count);
 
     pr_info(
-        DEVICE_NAME
-        ": release: dev=%u:%u ctx=%s[%d] opens=%d\n",
-        imajor(inode),
-        iminor(inode),
-        current->comm,
-        current->pid,
-        count
+	DEVICE_NAME
+	": release: dev=%u:%u ctx=%s[%d] opens=%d\n",
+	imajor(inode),
+	iminor(inode),
+	current->comm,
+	current->pid,
+	count
     );
 
     return 0;
 }
-
 
 /*
  * VFS operation table.
@@ -224,7 +209,6 @@ static int register_cdev_release(
  * to functions inside our kernel module.
  */
 static const struct file_operations register_cdev_fops = {
-
     /*
      * Prevent module removal while the device is being used.
      */
@@ -246,7 +230,6 @@ static const struct file_operations register_cdev_fops = {
     .release = register_cdev_release,
 };
 
-
 /*
  * Module initialization.
  *
@@ -259,11 +242,9 @@ static int __init register_cdev_init(void)
     u64 start_ns;
     u64 elapsed_ns;
 
-
     start_ns = ktime_get_ns();
 
     loaded_at_ns = start_ns;
-
 
     /*
      * major = 0 means:
@@ -275,39 +256,34 @@ static int __init register_cdev_init(void)
      * file_operations structure.
      */
     major = register_chrdev(
-        0,
-        DEVICE_NAME,
-        &register_cdev_fops
+	0,
+	DEVICE_NAME,
+	&register_cdev_fops
     );
-
 
     /*
      * Negative values represent Linux errno values.
      */
     if (major < 0) {
+	pr_err(
+	    DEVICE_NAME
+	    ": init: register_chrdev failed err=%d\n",
+	    major
+	);
 
-        pr_err(
-            DEVICE_NAME
-            ": init: register_chrdev failed err=%d\n",
-            major
-        );
-
-        return major;
+	return major;
     }
-
 
     elapsed_ns = ktime_get_ns() - start_ns;
 
-
     pr_info(
-        DEVICE_NAME
-        ": init: major=%d minors=0-255 ctx=%s[%d] time=%llu us\n",
-        major,
-        current->comm,
-        current->pid,
-        (unsigned long long)(elapsed_ns / 1000ULL)
+	DEVICE_NAME
+	": init: major=%d minors=0-255 ctx=%s[%d] time=%llu us\n",
+	major,
+	current->comm,
+	current->pid,
+	(unsigned long long)(elapsed_ns / 1000ULL)
     );
-
 
     /*
      * Print addresses of objects belonging to this module.
@@ -315,18 +291,16 @@ static int __init register_cdev_init(void)
      * Modern kernels may hash/restrict pointer output.
      */
     pr_info(
-        DEVICE_NAME
-        ": objects: module=%p fops=%p major_var=%p open_count=%p\n",
-        THIS_MODULE,
-        &register_cdev_fops,
-        &major,
-        &open_count
+	DEVICE_NAME
+	": objects: module=%p fops=%p major_var=%p open_count=%p\n",
+	THIS_MODULE,
+	&register_cdev_fops,
+	&major,
+	&open_count
     );
-
 
     return 0;
 }
-
 
 /*
  * Module cleanup.
@@ -341,48 +315,41 @@ static void __exit register_cdev_exit(void)
     u64 uptime_ns;
     u64 elapsed_ns;
 
-
     start_ns = ktime_get_ns();
 
     uptime_ns = start_ns - loaded_at_ns;
 
-
     pr_info(
-        DEVICE_NAME
-        ": exit: major=%d opens=%d ctx=%s[%d] uptime=%llu ms\n",
-        major,
-        atomic_read(&open_count),
-        current->comm,
-        current->pid,
-        (unsigned long long)(uptime_ns / 1000000ULL)
+	DEVICE_NAME
+	": exit: major=%d opens=%d ctx=%s[%d] uptime=%llu ms\n",
+	major,
+	atomic_read(&open_count),
+	current->comm,
+	current->pid,
+	(unsigned long long)(uptime_ns / 1000000ULL)
     );
-
 
     /*
      * Remove our character-device registration
      * from the kernel.
      */
     unregister_chrdev(
-        major,
-        DEVICE_NAME
+	major,
+	DEVICE_NAME
     );
-
 
     elapsed_ns = ktime_get_ns() - start_ns;
 
-
     pr_info(
-        DEVICE_NAME
-        ": exit: unregistered major=%d time=%llu us\n",
-        major,
-        (unsigned long long)(elapsed_ns / 1000ULL)
+	DEVICE_NAME
+	": exit: unregistered major=%d time=%llu us\n",
+	major,
+	(unsigned long long)(elapsed_ns / 1000ULL)
     );
 }
 
-
 module_init(register_cdev_init);
 module_exit(register_cdev_exit);
-
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("guguali");
