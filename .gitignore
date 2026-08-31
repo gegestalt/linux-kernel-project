@@ -11,10 +11,10 @@
 *.mod.o
 *.mod.cmd
 Module.symvers
-Module.symvers.cmd
+.Module.symvers.cmd
 Module.markers
 modules.order
-modules.order.cmd
+.modules.order.cmd
 .module-common.o
 ..module-common.o.cmd
 .tmp_versions/
