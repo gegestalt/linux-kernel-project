@@ -12,6 +12,19 @@ session.
 Based on the official kernel documentation:
 <https://www.kernel.org/doc/html/latest/dev-tools/gdb-kernel-debugging.html>
 
+## Status: the debug kernel is built
+
+`linux_mainline/vmlinux` exists, is `ELF ... with debug_info, not
+stripped`, and `include/config/kernel.release` reports
+**`7.2.0-kgdb-debug+`** — distinct from this machine's actual running
+kernel, so it can never collide with it. `arch/arm64/boot/Image` (the
+bootable kernel image) is built too. Section 2 below is now a record of
+how it was built, not something you need to repeat — skip straight to
+**section 1** (create VM B) and **section 3** (install on VM B) if you're
+picking this up fresh. The only work still outstanding is entirely
+manual, on your end: creating VM B in VMware, installing this kernel on
+it, and wiring the serial connection — sections 1, 3, and 4.
+
 ## 0. The topology: two VMs, not one
 
 This machine (call it **VM A**) is itself a VMware guest — running GDB
@@ -35,23 +48,27 @@ code that could, in principle, go wrong.
 
 ## 1. Create VM B
 
+The debug kernel (section 2) is already built on VM A — clone **now**,
+so VM B inherits the finished `linux_mainline/vmlinux` and
+`arch/arm64/boot/Image` for free and never has to build anything itself.
+
 In VMware: **clone VM A** (`File → Clone → Full Clone`) rather than
 installing fresh — this guarantees VM B has the exact same userland,
-`libgpiod`, `linux_mainline` checkout, and this repo already in place.
-Give it a distinct name (`linux-kernel-project-debug-target`).
+`libgpiod`, `linux_mainline` checkout (built kernel included), and this
+repo already in place. Give it a distinct name
+(`linux-kernel-project-debug-target`).
 
 **Immediately after the clone, before doing anything else:**
 `VM → Snapshot → Take Snapshot`. This is the actual safety net for
 everything that follows.
 
-## 2. Build the debug kernel (on VM A)
+## 2. Build the debug kernel (already done on VM A — this is the record)
 
 ```bash
 cd linux_mainline
-sudo apt install -y flex bison libssl-dev libelf-dev   # build prerequisites
-cp /usr/src/linux-headers-$(uname -r)/.config .config    # seed from the running config
+sudo apt install -y flex bison libssl-dev libelf-dev gawk   # build prerequisites
+cp /usr/src/linux-headers-$(uname -r)/.config .config          # seed from the running config
 sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-kgdb-debug"/' .config
-make olddefconfig
 ```
 
 The running kernel's own config already has everything needed
@@ -61,22 +78,75 @@ seeding from it rather than starting from `defconfig` saves a trip
 through `menuconfig`. The `LOCALVERSION` change matters: it makes
 `uname -r` for this kernel end in `-kgdb-debug`, so it's unmistakably
 different from the one already installed and gets its own `/lib/modules/`
-directory and its own GRUB entry rather than colliding with anything.
+directory and its own GRUB entry rather than colliding with anything —
+confirmed afterward via `cat include/config/kernel.release` reporting
+`7.2.0-kgdb-debug+`.
+
+Two things in a config seeded from a distro's own `/boot/config-*` don't
+carry over cleanly to a vanilla upstream checkout, and both had to be
+fixed before the build would proceed:
 
 ```bash
-make -j3      # leave one core free; this is a full kernel build, budget real time
+# The seeded config points at Canonical's own build-time cert files,
+# which don't exist here - clear them, we don't need module signing:
+sed -i 's/^CONFIG_SYSTEM_TRUSTED_KEYS=.*/CONFIG_SYSTEM_TRUSTED_KEYS=""/' .config
+sed -i 's/^CONFIG_SYSTEM_REVOCATION_KEYS=.*/CONFIG_SYSTEM_REVOCATION_KEYS=""/' .config
+
+# CONFIG_GENDWARFKSYMS needs libdw-dev (not installed) and is DWARF-based
+# module-ABI-versioning bookkeeping, unrelated to debug info - disable it
+# rather than installing a dependency for a feature we don't need:
+./scripts/config --disable GENDWARFKSYMS
+
+make olddefconfig
 ```
 
-This produces `vmlinux` (with full debug info — this is what GDB will
-load) and the compressed boot image under `arch/arm64/boot/`.
+**Disk is a real constraint.** A distro `.config` seeded wholesale
+builds modules for hardware this VM will never have — GPU drivers alone
+(`amdgpu`, etc.) run into gigabytes — and the build ran the disk to 98%
+full partway through (a failed `amdgpu.ko` link, "No space left on
+device"). The fix: trim to only what this VM actually uses via
+`localmodconfig`, which reads currently-loaded modules and disables
+everything else as `=m`. **Load anything you specifically want kept
+first** (`gpio-sim` was `modprobe`'d before this ran, specifically so
+lab 03 would keep working):
+
+```bash
+sudo modprobe gpio-sim
+yes "" | make localmodconfig   # "yes" auto-answers "keep as module" prompts for ambiguous cases
+make clean                       # reclaims everything the old, untrimmed build produced
+```
+
+This took the config from thousands of `=m` entries down to 50, all
+core `=y` options (`KGDB`, `DEBUG_INFO`, `GDB_SCRIPTS`, ...) untouched
+since `localmodconfig` only ever turns off unused *modules*, never
+built-in features — worth double-checking after any trim:
+
+```bash
+grep -E "^CONFIG_KGDB=|^CONFIG_DEBUG_INFO=|^CONFIG_GDB_SCRIPTS=|^CONFIG_GPIO_SIM=" .config
+```
+
+```bash
+make -j3      # leave one core free
+```
+
+This produces `vmlinux` (with full debug info — this is what GDB loads)
+and the compressed boot image under `arch/arm64/boot/`. On this VM (4
+cores, trimmed config) it finished in well under an hour; the original,
+untrimmed distro-scale config was still running after several hours and
+ran the disk out of space before finishing — trimming first isn't
+optional in practice, it's the difference between finishing and not.
 
 ## 3. Install it on VM B, as an *additional*, non-default entry
 
-Copy the build tree to VM B (shared folder, `scp`, or since VM B is a
-clone of VM A, `linux_mainline/` is already there — just `git pull`/copy
-the same commit and re-run steps 2's `make` on VM B directly instead of
-transferring binaries, which sidesteps any path-dependent build
-artifacts entirely). Then, **on VM B**:
+Since the build (section 2) is already finished on VM A, **clone VM B
+now, after it, not before** — the clone picks up the already-built
+`linux_mainline/vmlinux` and `arch/arm64/boot/Image` for free, so VM B
+never has to rebuild anything, only install what's already sitting
+there. (If VM B was cloned earlier and doesn't have the finished build,
+re-run section 2's `make -j3` on VM B directly instead of transferring
+binaries — that sidesteps any path-dependent build artifacts.)
+
+**On VM B:**
 
 ```bash
 cd linux_mainline
@@ -95,9 +165,14 @@ If you want the new kernel to boot *this once* without permanently
 changing the default:
 
 ```bash
-sudo grub-reboot "Advanced options for Ubuntu>Ubuntu, with Linux 7.0.0-30-kgdb-debug"
+sudo grub-reboot "Advanced options for Ubuntu>Ubuntu, with Linux 7.2.0-kgdb-debug+"
 sudo reboot
 ```
+
+(That's this build's actual `kernel.release` — confirm yours matches
+with `cat /home/adiopocere/Desktop/codes/linux_mainline/include/config/kernel.release`
+before using it verbatim; a rebuild with a different `LOCALVERSION` or
+base commit would change it.)
 
 `grub-reboot` only affects the next boot — if the new kernel fails to
 come up cleanly, the *following* reboot falls back to the known-good
@@ -224,16 +299,16 @@ see each lab's own README for the full trigger commands.
 | 01 | `hello.ko` | `init_module`, `cleanup_module` |
 | 02 | `better_hello.ko` | `my_init`, `my_exit` |
 | 03 | `gpioctrl.ko` | `gpioctrl_init`, `gpioctrl_sample_once`, `gpioctrl_write`, `gpioctrl_work_fn` |
-| 04 | `module_params.ko` | `module_params_init`, `module_params_read` |
+| 04 | `module_params.ko` | `module_params_init`, `module_params_read`, `module_params_exit` |
 | 05 | `register_cdev.ko` | `register_cdev_init`, `register_cdev_open`, `register_cdev_read` |
 | 06 | `procfs_seqfile.ko` | `events_seq_start`, `events_seq_next`, `events_seq_show`, `events_seq_stop`, `info_show` |
 | 07 | `printk_log_levels.ko` | `printk_log_levels_init`, `printk_emit_all_levels` |
 | 08 | `open_release_cdev.ko` | `my_open`, `my_release` |
 | 09 | `read_write_cdev.ko` | `read_write_cdev_init`, `rw_read`, `rw_write` |
 | 10 | `ioctl_basics.ko` | `ioctl_basics_init`, `ioctl_basics_ioctl` |
-| 11 | `concurrency_locking.ko` | `increment_once`, `race_write` |
+| 11 | `concurrency_locking.ko` | `race_write` (not `increment_once` - compiler-inlined) |
 | 12 | `wait_queues_blocking.ko` | `producer_fn`, `bq_read`, `bq_poll` |
-| 13 | `kernel_memory.ko` | `do_allocate`, `do_free` |
+| 13 | `kernel_memory.ko` | `allocate_store` (not `do_allocate` - compiler-inlined), `do_free` |
 | 14 | `timers_workqueues.ko` | `heartbeat_timer_fn`, `heartbeat_work_fn` |
 | 15 | `kthreads.ko` | `producer_thread_fn`, `start_producer`, `stop_producer`, `kthread_should_stop` |
 | 16 | `debugfs_sysfs.ko` | `enabled_store`, `increment_store`, `info_read` |
