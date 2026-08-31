@@ -127,8 +127,14 @@ $3 = 1
 ### Step 3 — the same code path, `MODE_SPINLOCK`, and why the window is gone
 
 ```gdb
-(gdb) delete
+(gdb) delete <the race_write breakpoint's number — `info breakpoints` if unsure>
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint, but first
+asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
+prompt can silently swallow your next command instead of actually
+deleting anything. Naming the number skips the prompt; same reasoning
+applies to every `delete` in the rest of this walkthrough.)
 ```bash
 # vmb:
 echo 1 | tee /sys/class/misc/race_demo/mode
@@ -178,7 +184,7 @@ state between the read and the write for another writer to land in.
 ### Step 4 — `MODE_MUTEX`, and the one real difference from spinlock
 
 ```gdb
-(gdb) delete
+(gdb) delete <the race_write breakpoint's number>
 ```
 ```bash
 # vmb:
@@ -215,7 +221,7 @@ could not legally take this same kind of lock.
 ### Step 5 — `MODE_ATOMIC`, and why "no lock" still isn't a race here
 
 ```gdb
-(gdb) delete
+(gdb) delete <the race_write breakpoint's number>
 ```
 ```bash
 # vmb:
@@ -252,7 +258,7 @@ driver).
 ### Step 6 — `mode_store`/`reset_store`, briefly
 
 ```gdb
-(gdb) delete
+(gdb) delete <the race_write breakpoint's number>
 (gdb) break mode_store
 (gdb) continue
 ```
@@ -277,12 +283,61 @@ different concurrency strategies, both defensible for the same reason.
 
 ## Cleanup
 
+**`break concurrency_locking_exit` does not work if you try it
+directly — confirmed live.** `concurrency_locking_exit` is marked
+`__exit`, placing it in its own ELF section, `.exit.text`, which
+`lx-symbols` never relocates (its hardcoded section list in
+`scripts/gdb/linux/symbols.py` doesn't include `.init.text`/
+`.exit.text`). The breakpoint silently resolves to a raw, unrelocated
+file offset instead of a real address — no error, it just never fires.
+This affects every module in this repo using the modern
+`module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+out of the kernel's own struct:
+
 ```gdb
-(gdb) delete
+(gdb) delete <the mode_store breakpoint's number>
+(gdb) break __do_sys_delete_module
+(gdb) continue
 ```
 ```bash
 # vmb:
 rmmod concurrency_locking
+```
+```gdb
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c3205b8
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you.
+Register the section the way `lx-symbols` does for the sections it
+already knows about, and the normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/11_concurrency_locking/concurrency_locking.ko -s .exit.text 0xffff80007c3205b8
+(gdb) break concurrency_locking_exit
+Breakpoint N at 0xffff80007c3205b8: file concurrency_locking.c, line 269.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod concurrency_locking
+```
+```gdb
+Thread N hit Breakpoint N, concurrency_locking_exit () at concurrency_locking.c:269
+269		sysfs_remove_group(&race_miscdev.this_device->kobj, &race_attr_group);
+(gdb) continue
+```
+```bash
+# vmb:
 poweroff -f
 ```
 

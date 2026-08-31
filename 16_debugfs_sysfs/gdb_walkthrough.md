@@ -155,10 +155,16 @@ worth doing once as a comparison, not because it's dangerous in a
 single-threaded manual session:
 
 ```gdb
-(gdb) delete
+(gdb) delete <the enabled watchpoint's number — `info breakpoints` if unsure>
 (gdb) break increment_store
 (gdb) continue
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint/watchpoint,
+but first asks `Delete all breakpoints? (y or n)` — if you're typing
+ahead, that prompt can silently swallow your next command instead of
+actually deleting anything. Naming the number skips the prompt; same
+reasoning applies to the `delete`s below.)
 ```bash
 # vmb:
 echo 1 | tee /sys/kernel/debugfs_sysfs_demo/increment
@@ -201,7 +207,7 @@ a real `file_operations` struct with a real `read` callback, just like
 any other char device:
 
 ```gdb
-(gdb) delete
+(gdb) delete <the increment_store breakpoint's number>
 (gdb) break info_read
 (gdb) continue
 ```
@@ -226,9 +232,22 @@ with fundamentally different amounts of code (and safety) behind them.
 
 ## Cleanup
 
+**`break debugfs_sysfs_exit` does not work if you try it directly —
+confirmed live.** `debugfs_sysfs_exit` is marked `__exit`, placing it
+in its own ELF section, `.exit.text`, which `lx-symbols` never
+relocates (its hardcoded section list in `scripts/gdb/linux/symbols.py`
+doesn't include `.init.text`/`.exit.text`). The breakpoint silently
+resolves to a raw, unrelocated file offset instead of a real address —
+no error, it just never fires. This affects every module in this repo
+using the modern `module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+out of the kernel's own struct:
+
 ```gdb
-(gdb) delete
-(gdb) break debugfs_sysfs_exit
+(gdb) delete <the info_read breakpoint's number>
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -236,8 +255,35 @@ with fundamentally different amounts of code (and safety) behind them.
 rmmod debugfs_sysfs
 ```
 ```gdb
-Thread 2 hit Breakpoint N, debugfs_sysfs_exit () at debugfs_sysfs.c:207
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320540
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you.
+Register the section the way `lx-symbols` does for the sections it
+already knows about, and the normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/16_debugfs_sysfs/debugfs_sysfs.ko -s .exit.text 0xffff80007c320540
+(gdb) break debugfs_sysfs_exit
+Breakpoint N at 0xffff80007c320540: file debugfs_sysfs.c, line 207.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod debugfs_sysfs
+```
+```gdb
+Thread N hit Breakpoint N, debugfs_sysfs_exit () at debugfs_sysfs.c:207
+207		debugfs_remove_recursive(demo_debugfs_dir);
 (gdb) next   # debugfs_remove_recursive(demo_debugfs_dir)
+(gdb) continue
 ```
 ```bash
 # vmb:

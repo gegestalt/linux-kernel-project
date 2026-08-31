@@ -152,10 +152,17 @@ $5 = ALLOC_KMALLOC
 ```
 
 ```gdb
-(gdb) delete
+(gdb) delete <the do_free breakpoint's number — `info breakpoints` if unsure>
 (gdb) break allocate_store
 (gdb) continue
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint, but first
+asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
+prompt can silently swallow your next command instead of actually
+deleting anything. Naming the number skips the prompt; same reasoning
+applies to every `delete` in the rest of this walkthrough.)
+
 ```bash
 # vmb:
 echo "vmalloc 100" | tee /sys/kernel/kernel_memory/allocate
@@ -182,7 +189,7 @@ you asked for because it isn't drawing from fixed-size buckets at all.
 ### Step 4 — the fixed-size cache
 
 ```gdb
-(gdb) delete
+(gdb) delete <the allocate_store breakpoint's number>
 (gdb) break allocate_store
 (gdb) continue
 ```
@@ -241,7 +248,7 @@ echo "kmalloc 50" | tee /sys/kernel/kernel_memory/allocate
 ### Step 6 — `stats`: cumulative counters across everything above
 
 ```gdb
-(gdb) delete
+(gdb) delete <the allocate_store breakpoint's number>
 (gdb) break stats_show
 (gdb) continue
 ```
@@ -269,9 +276,22 @@ step 5 did rather than assuming from the field name alone.
 
 ## Cleanup
 
+**`break kernel_memory_exit` does not work if you try it directly —
+confirmed live.** `kernel_memory_exit` is marked `__exit`, placing it
+in its own ELF section, `.exit.text`, which `lx-symbols` never
+relocates (its hardcoded section list in `scripts/gdb/linux/symbols.py`
+doesn't include `.init.text`/`.exit.text`). The breakpoint silently
+resolves to a raw, unrelocated file offset instead of a real address —
+no error, it just never fires. This affects every module in this repo
+using the modern `module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+out of the kernel's own struct:
+
 ```gdb
-(gdb) delete
-(gdb) break kernel_memory_exit
+(gdb) delete <the stats_show breakpoint's number>
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -279,8 +299,34 @@ step 5 did rather than assuming from the field name alone.
 rmmod kernel_memory
 ```
 ```gdb
-Thread 2 hit Breakpoint N, kernel_memory_exit () at kernel_memory.c:353
-(gdb) next   # `if (cur_type != ALLOC_NONE)` - the safety-net free on unload
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c3207f8
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you.
+Register the section the way `lx-symbols` does for the sections it
+already knows about, and the normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/13_kernel_memory/kernel_memory.ko -s .exit.text 0xffff80007c3207f8
+(gdb) break kernel_memory_exit
+Breakpoint N at 0xffff80007c3207f8: file kernel_memory.c, line 353.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod kernel_memory
+```
+```gdb
+Thread N hit Breakpoint N, kernel_memory_exit () at kernel_memory.c:353
+353		if (cur_type != ALLOC_NONE) {
+(gdb) next   # the safety-net free on unload
 ```
 
 If you left an allocation live (step 4's cache object, most likely, if
@@ -296,6 +342,9 @@ the defensive cleanup path run; if you already freed everything
 manually, this branch is skipped and `cur_type` reads `ALLOC_NONE`
 already.
 
+```gdb
+(gdb) continue
+```
 ```bash
 # vmb:
 poweroff -f

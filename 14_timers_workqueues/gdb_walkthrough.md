@@ -114,10 +114,16 @@ timer" from the source comment.
 ### Step 3 — the workqueue: the same job, a genuinely different context
 
 ```gdb
-(gdb) delete
+(gdb) delete <the heartbeat_timer_fn breakpoint's number — `info breakpoints` if unsure>
 (gdb) break heartbeat_work_fn
 (gdb) continue
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint, but first
+asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
+prompt can silently swallow your next command instead of actually
+deleting anything. Naming the number skips the prompt; same reasoning
+applies to Step 4's `delete` below.)
 ```gdb
 Thread 2 hit Breakpoint N, heartbeat_work_fn (work=0x...) at timers_workqueues.c:103
 (gdb) bt
@@ -171,7 +177,7 @@ distilled to two strings you read straight out of memory.
 ### Step 4 — read both stats side by side, confirm they've been ticking independently
 
 ```gdb
-(gdb) delete
+(gdb) delete <the heartbeat_work_fn breakpoint's number>
 ```
 ```bash
 # vmb:
@@ -192,8 +198,22 @@ a time.
 
 ## Cleanup
 
+**`break timers_workqueues_exit` does not work if you try it directly
+— confirmed live.** `timers_workqueues_exit` is marked `__exit`,
+placing it in its own ELF section, `.exit.text`, which `lx-symbols`
+never relocates (its hardcoded section list in
+`scripts/gdb/linux/symbols.py` doesn't include `.init.text`/
+`.exit.text`). The breakpoint silently resolves to a raw, unrelocated
+file offset instead of a real address — no error, it just never fires.
+This affects every module in this repo using the modern
+`module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+out of the kernel's own struct:
+
 ```gdb
-(gdb) break timers_workqueues_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -201,8 +221,34 @@ a time.
 rmmod timers_workqueues
 ```
 ```gdb
-Thread 2 hit Breakpoint N, timers_workqueues_exit () at timers_workqueues.c:195
-(gdb) next   # timer_shutdown_sync(&heartbeat_timer)
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320580
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you.
+Register the section the way `lx-symbols` does for the sections it
+already knows about, and the normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/14_timers_workqueues/timers_workqueues.ko -s .exit.text 0xffff80007c320580
+(gdb) break timers_workqueues_exit
+Breakpoint N at 0xffff80007c320580: file timers_workqueues.c, line 195.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod timers_workqueues
+```
+```gdb
+Thread N hit Breakpoint N, timers_workqueues_exit () at timers_workqueues.c:195
+195		timer_shutdown_sync(&heartbeat_timer);
+(gdb) next    # timer_shutdown_sync(&heartbeat_timer)
 (gdb) next    # cancel_delayed_work_sync(&heartbeat_work)
 ```
 
@@ -214,6 +260,9 @@ wait, because "something might still be running asynchronously" is a
 recurring fact of real driver code, not a one-off concern specific to
 any single module.
 
+```gdb
+(gdb) continue
+```
 ```bash
 # vmb:
 poweroff -f

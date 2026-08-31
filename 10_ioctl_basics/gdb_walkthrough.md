@@ -214,14 +214,62 @@ ioctl for device"`) is just `strerror(25)`.
 
 ## Cleanup
 
+**`break ioctl_basics_exit` does not work if you try it directly —
+confirmed live.** `ioctl_basics_exit` is marked `__exit`, placing it in
+its own ELF section, `.exit.text`, which `lx-symbols` never relocates
+(its hardcoded section list in `scripts/gdb/linux/symbols.py` covers
+`.text`/`.data`/`.rodata`/`.bss` and a few others, but not
+`.init.text`/`.exit.text`). The breakpoint silently resolves to a raw,
+unrelocated file offset instead of a real kernel address — no error,
+it just never fires. This affects every module in this repo using the
+modern `module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+straight out of the kernel's own struct once you're there:
+
 ```gdb
-(gdb) delete
-(gdb) break ioctl_basics_exit
+(gdb) delete <the ioctl_basics_ioctl breakpoint's number — `info breakpoints` if unsure>
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
 # vmb:
 rmmod ioctl_basics
+```
+```gdb
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320700
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table, GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you
+if you've already tried. Register the section with GDB the way
+`lx-symbols` does for the sections it already knows about, and the
+normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/10_ioctl_basics/ioctl_basics.ko -s .exit.text 0xffff80007c320700
+(gdb) break ioctl_basics_exit
+Breakpoint N at 0xffff80007c320700: file ioctl_basics.c, line 203.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod ioctl_basics
+```
+```gdb
+Thread N hit Breakpoint N, ioctl_basics_exit () at ioctl_basics.c:203
+203		device_destroy(ioctl_class, devt);
+(gdb) continue
+```
+```bash
+# vmb:
 poweroff -f
 ```
 
