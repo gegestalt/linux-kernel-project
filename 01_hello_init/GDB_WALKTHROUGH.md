@@ -202,8 +202,17 @@ that's determined by the function's actual signature, not by GDB.
 ## Cleanup
 
 ```gdb
-(gdb) delete
+(gdb) delete 1 2 3
 ```
+
+(Bare `delete` with no arguments deletes *all* breakpoints too, but it
+first asks `Delete all breakpoints? (y or n)` — if you're driving this
+session non-interactively (piping commands in, or typing ahead) that
+confirmation prompt can eat your next command instead of actually
+deleting anything, leaving stale breakpoints active. Naming the numbers
+explicitly, as above, skips the prompt entirely and is the safer habit
+to build now, before it costs you a confusing session later.)
+
 ```bash
 # in vmb:
 poweroff -f

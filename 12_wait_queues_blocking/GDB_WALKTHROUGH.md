@@ -67,30 +67,85 @@ Don't touch `vmb` — `producer_fn` fires on its own, every
 ```gdb
 Thread 2 hit Breakpoint N, producer_fn (t=0x...) at wait_queues_blocking.c:50
 (gdb) bt
-#0  producer_fn (t=0x...) at wait_queues_blocking.c:50
-#1  0x... in call_timer_fn (...) at kernel/time/timer.c:...
-#2  0x... in __run_timers (...) at kernel/time/timer.c:...
-#3  0x... in run_timer_softirq (...) at kernel/time/timer.c:...
-#4  0x... in __do_softirq (...) at kernel/softirq.c:...
 ```
 
 This backtrace is the concrete evidence behind the source comment
 ("Timer callbacks run in softirq context: no sleeping, no blocking
-allocations"): the bottom frames are softirq machinery, not a task's
-own thread. Confirm `current` here is whatever happened to be running
-when the softirq fired, not anything meaningfully related to this
-timer:
+allocations"): every frame below `producer_fn` is timer/softirq
+machinery, not a task's own thread. On a real kernel, expect this to be
+considerably deeper than a textbook `call_timer_fn` →
+`run_timer_softirq` → `__do_softirq` sketch — this repo's own kernel,
+live-tested, actually showed:
 
-```gdb
-(gdb) print current->comm
-(gdb) print current->pid
+```
+#0  producer_fn (...) at wait_queues_blocking.c:50
+#1  call_timer_fn (...) at kernel/time/timer.c:1748
+#2  expire_timers (...) at kernel/time/timer.c:1799
+#3  __run_timers (...) at kernel/time/timer.c:2374
+#4  __run_timer_base (...) at kernel/time/timer.c:2386
+#5  __run_timer_base (...) at kernel/time/timer.c:2378
+#6  timer_expire_remote (cpu=1) at kernel/time/timer.c:2136
+#7  tmigr_handle_remote_cpu (...) at kernel/time/timer_migration.c:985
+#8  tmigr_handle_remote_up (...) at kernel/time/timer_migration.c:1076
+#9  __walk_groups_from (...) at kernel/time/timer_migration.c:564
+#10 __walk_groups (...) at kernel/time/timer_migration.c:581
+#11 tmigr_handle_remote () at kernel/time/timer_migration.c:1135
+#12 run_timer_softirq () at kernel/time/timer.c:2409
+#13 handle_softirqs (...) at kernel/softirq.c:645
+#14 __do_softirq () at kernel/softirq.c:679
+#15 ____do_softirq (...) at arch/arm64/kernel/irq.c:78
+#16 call_on_irq_stack () at arch/arm64/kernel/entry.S:885
+#17 0x... in ?? ()
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)
 ```
 
-Step through the actual work:
+The `timer_expire_remote`/`tmigr_*` frames are the NOHZ timer-migration
+subsystem: this timer's *nominal* CPU was idle, so a different CPU's
+softirq picked it up and is expiring it "remotely" on the idle CPU's
+behalf rather than waking it just to run one timer — genuinely more of
+the kernel's power-management machinery than the source comment alone
+suggests, and a fair example of how a two-line "no sleeping in softirq
+context" comment can sit on top of a much deeper real call chain. Two
+things are also just artifacts, not bugs: several frames may be tagged
+`[PAC]` (arm64 pointer authentication on the return address — GDB
+strips it to unwind, and tags the frame so you know it did), and the
+outermost frame commonly ends in `Backtrace stopped: previous frame
+inner to this frame (corrupt stack?)` — that's GDB hitting the
+irq-stack-switch boundary in `call_on_irq_stack`, not a real stack
+corruption.
+
+Confirm `current` here is whatever happened to be running when the
+softirq fired, not anything meaningfully related to this timer. Plain
+`current` is not visible as an ordinary C symbol to GDB over a remote
+kernel target (it's backed by an architecture-specific per-CPU access,
+not a global variable) — `print current->comm` fails with `No symbol
+"current" in current context`. Use the `lx-symbols`-provided
+convenience function instead, which reads it correctly:
 
 ```gdb
-(gdb) next    # atomic64_inc(&event_id)
-(gdb) print event_id
+(gdb) print $lx_current().comm
+(gdb) print $lx_current().pid
+```
+
+Live-tested, this printed `"swapper/0"` / `0` — the idle task, not
+`insmod` or any process meaningfully related to this timer, confirming
+the source comment's point directly.
+
+Step through the actual work. **Exact `next` counts here are not
+reliable** and shouldn't be memorized: `atomic64_inc()`/`atomic_set()`
+on arm64 are commonly emitted through an alternative-patched LSE atomic
+instruction sequence (see `arch/arm64/include/asm/alternative-macros.h`),
+and a `next` from the function's opening line can land you *inside that
+header* for a step before returning to `wait_queues_blocking.c` — the
+same "next moves in the compiled sense, not the textual one" lesson
+from lab 01, just a different concrete shape. Watch the line GDB
+actually shows you after each `next` rather than counting how many
+you've typed:
+
+```gdb
+(gdb) next    # may show alternative-macros.h briefly - keep going
+(gdb) next
+(gdb) print event_id   # confirm it incremented once you're back in this file, past the atomic64_inc line
 (gdb) next     # atomic_set(&data_ready, 1)
 (gdb) next      # wake_up_interruptible(&event_wq) - about to matter a lot in step 2
 (gdb) next       # mod_timer() reschedules itself for the next interval
@@ -103,10 +158,15 @@ don't want it firing repeatedly while you set this up), and this time
 break where a *reader* actually goes to sleep:
 
 ```gdb
-(gdb) delete
+(gdb) delete <the producer_fn breakpoint's number>
 (gdb) break bq_read
 (gdb) continue
 ```
+
+(`delete` with no arguments deletes *everything*, but asks a `(y or n)`
+confirmation first — worth avoiding here too, same reasoning as lab
+01's cleanup section: name the number.)
+
 ```bash
 # vmb:
 cat /dev/blocking_demo &
@@ -117,10 +177,66 @@ block:
 
 ```gdb
 Thread 2 hit Breakpoint N, bq_read (...) at wait_queues_blocking.c:76
-(gdb) next    # atomic_xchg(&data_ready, 0) - probably 0 right now, no event pending yet
+```
+
+**Check for a pending event before going further — this is the step's
+real trap.** By the time you reach this point you've typically already
+spent a minute or more single-stepping through Step 1, and
+`producer_fn` fires every `interval_ms` (1500ms by default) the whole
+time, whether you're watching it or not. Live-tested running through
+this walkthrough at a normal pace, `event_id` was already at `5` by the
+time this breakpoint was reached — meaning `data_ready` is almost
+certainly already `1` here, and `atomic_xchg(&data_ready, 0)` a few
+lines down will take the *non-blocking* fast path and return
+immediately, never touching `wait_event_interruptible()` at all. If you
+don't check for this, the rest of this step simply won't show you what
+it claims to: `waiter_count` never moves off `0`, `lx-ps` never shows
+`cat` as blocked, and it's not obvious why.
+
+```gdb
+(gdb) print data_ready
+```
+
+If that reads `{counter = 1}` (expect it to, most of the time), this
+first `cat` is about to return immediately without blocking — confirm
+it, on purpose, as a real (if accidental) demonstration of the fast
+path:
+
+```gdb
+(gdb) finish
+```
+
+This returns the already-available event straight away — genuinely
+useful to see once, since it's the *other* branch through this
+function's logic, but not what this step is for. `data_ready` is now
+`0` again (the `atomic_xchg` cleared it on the way out). Start a fresh
+read immediately, and get back to a breakpoint before the next tick has
+a chance to set it again:
+
+```bash
+# vmb:
+cat /dev/blocking_demo &
+```
+```gdb
+(gdb) continue
+```
+
+You should land back in `bq_read` with `data_ready` genuinely `0` this
+time (confirm with `print data_ready` again if you like). Now step
+through for real:
+
+```gdb
+(gdb) next    # atomic_xchg(&data_ready, 0) - 0 this time, no event pending
 (gdb) next     # not O_NONBLOCK, so: atomic_inc(&waiter_count)
+```
+
+Same caution as Step 1: GDB's `next` stops *before* executing the line
+it displays, not after — so `waiter_count` is still `0` here, not `1`;
+`print` it now and you'll see the pre-increment value:
+
+```gdb
 (gdb) print waiter_count
-$1 = {counter = 1}
+$1 = {counter = 0}
 (gdb) next      # wait_event_interruptible(event_wq, atomic_read(&data_ready))
 ```
 
@@ -134,7 +250,11 @@ to hang, that's not a bug, it's this task legitimately asleep;
 while it waits (remembering the guest is otherwise frozen the whole
 time GDB is stopped anywhere — real wall-clock time inside the guest
 only advances between your `continue`s, not while you're reading
-output at a breakpoint).
+output at a breakpoint). If the intervening declaration lines
+(`kbuf`/`len`/`ret`/`id`) appear to replay themselves under optimized
+`-O2` code before you actually reach `wait_event_interruptible`, that's
+the same DWARF-line-ordering looseness called out in Step 1, not a sign
+you looped — `frame` will confirm you're still in the same call.
 
 Confirm the sleeping task's own state directly, without single-stepping
 further — `lx-ps` shows every task's state field:
@@ -153,7 +273,7 @@ still actively executing. This `cat` is different: it has explicitly
 told the scheduler "wake me only when this condition is true," and
 handed control away in the meantime.
 
-### Step 3 — wake it up, and watch the *same* stopped `bq_read` resume
+### Step 3 — wake it up, and watch the *pending* `next` resume on its own
 
 With the reader still parked from step 2, trigger an event from a
 second path — the manual sysfs trigger rather than waiting out the
@@ -170,24 +290,38 @@ source — the misc device's own kobject — which is why this lives under
 `/sys/class/misc/race_demo/mode` uses, rather than under
 `/sys/kernel/...` the way labs 13–16's bare-kobject drivers do.)
 
+**Don't type anything new into the `gdbsess` pane for this step — just
+look at it.** The `next` you issued at the end of step 2 (on the
+`wait_event_interruptible(...)` line) is still pending: `bq_read` never
+returned to GDB's prompt, because that `next` is what's been sitting
+inside `schedule()` this whole time. There is no fresh breakpoint hit
+to wait for here — you already have a breakpoint on `bq_read`'s
+*entry*, and this task never leaves the function, so entry is never
+re-triggered. As soon as `wake_up_interruptible(&event_wq)` (called
+from `trigger_store`, or from the next `producer_fn` tick if you didn't
+beat the timer to it) makes the wait condition true, that outstanding
+`next` simply completes on its own and GDB prints its result — switch
+back to the `gdbsess` pane and it should already be sitting there:
+
 ```gdb
-(gdb) continue
+77          char kbuf[64];
 ```
 
-The very same `bq_read` call from step 2 — not a new one — now
-resumes past the `wait_event_interruptible()` call, because
-`wake_up_interruptible(&event_wq)` (from `trigger_store`, or from the
-next `producer_fn` tick if you didn't beat the timer to it) made its
-condition true:
+(or wherever the DWARF line table happens to land, per the Step 1/2
+caveat about optimized code) — the key point is you're *back*, in the
+same call, with the same local variables, having crossed a real
+sleep/wake/reschedule boundary without GDB losing track of anything.
+Confirm the waiter count dropped back to `0` (`atomic_dec_return`
+already ran on the way out of the wait) and step to where the loop
+re-checks its condition:
 
 ```gdb
-Thread 2 hit Breakpoint N, bq_read (...) at wait_queues_blocking.c:76
 (gdb) print waiter_count
-$2 = {counter = 0}    # atomic_dec_return already ran - back to 0
+$N = {counter = 0}
 ```
 
-Wait — if you land back at the top of `bq_read`'s `for (;;)` loop, this
-is correct: `wait_event_interruptible()` returning doesn't mean you're
+If you land back at the top of `bq_read`'s `for (;;)` loop, this is
+correct: `wait_event_interruptible()` returning doesn't mean you're
 past the function, it means the loop's condition check runs again,
 this time finding `atomic_xchg(&data_ready, 0)` true and `break`ing out
 for real:
@@ -200,7 +334,7 @@ for real:
 ### Step 4 — `poll()`: readiness without blocking
 
 ```gdb
-(gdb) delete
+(gdb) delete <the bq_read breakpoint's number>
 (gdb) break bq_poll
 (gdb) continue
 ```
@@ -226,23 +360,140 @@ which is precisely why this callback has to be non-blocking itself.
 
 ## Cleanup
 
+**`break wait_queues_blocking_exit` does not work here — confirmed
+live, and worth understanding why, because it affects every lab whose
+cleanup function uses the modern `module_exit()` macro (i.e. every lab
+in this repo except 01).** `wait_queues_blocking_exit` is marked
+`__exit`, which places it in its own ELF section, `.exit.text`,
+separate from the module's regular `.text`. `lx-symbols` relocates only
+a fixed, hardcoded list of extra sections when it maps a loaded
+module's addresses — in this kernel's
+`scripts/gdb/linux/symbols.py`, that list (`_section_arguments()`) is
+literally `.data`, `.data..read_mostly`, `.rodata`, `.bss`,
+`.text.hot`, `.text.unlikely`, plus the base `.text`. `.exit.text`
+(and `.init.text`) are simply never in it. So `break
+wait_queues_blocking_exit` — or `break wait_queues_blocking.c:222` by
+line, same result — silently resolves to the function's *raw,
+unrelocated* file offset (something tiny like `0x170`, not a real
+kernel address), and setting it appears to succeed with no error. It
+just never fires. `rmmod` will complete normally, dmesg will show the
+module's own unload message, and GDB will simply sit at `Continuing.`
+forever, having quietly missed it — there is no error message pointing
+at the real cause.
+
+**Diagnose this directly if you hit it**: compare the address GDB
+reports in `info breakpoints` against the real one from the guest's
+own sysfs:
+
+```bash
+# vmb:
+cat /sys/module/wait_queues_blocking/sections/.exit.text
+```
+
+If that's a real `0xffff8...`-style kernel address and GDB's `info
+breakpoints` shows something tiny by comparison, you've hit exactly
+this.
+
+**The fix that works, verified live** — break on the generic kernel
+hook that calls into every module's exit function, the same pattern
+Step 1 uses for init via `do_init_module`:
+
 ```gdb
-(gdb) delete
+(gdb) break __do_sys_delete_module
+(gdb) continue
+```
+```bash
+# vmb (make sure no backgrounded cat still holds the device open first -
+# see the reference-count note below):
+rmmod wait_queues_blocking
+```
+
+Advance to the actual call site (check with `list` if this line number
+has drifted on a different kernel version — you want the `mod->exit();`
+line inside the `delete_module` syscall handler in
+`kernel/module/main.c`) and read the real address straight out of the
+kernel's own struct, bypassing GDB's broken section table entirely:
+
+```gdb
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320640
+```
+
+(That exact address is from one real run and will not match yours —
+module memory is allocated fresh each boot regardless of `nokaslr`,
+which only fixes the *kernel image's* own load address, not per-module
+placement. Always use whatever `print mod->exit` gives you right now,
+not the number above — every address quoted for the rest of this
+section is illustrative of that same one run, for the same reason.)
+
+**Do not `step` into it from here** — confirmed live, this is a real
+trap, not a hypothetical one: since `.exit.text` has no relocated
+symbol table entry, GDB can't determine "the bounds of the current
+function" once it's inside it, so `step` never finds a recognized
+line to stop on. It just keeps single-instruction-stepping through
+everything from that point forward — the rest of the module's exit
+function, then whatever `__do_sys_delete_module` does next, and beyond
+— for as long as you let it. In this repo's own test it ran all the way
+through to the CPU's idle loop before being interrupted, with `rmmod`
+having long since completed underneath it. If you've already typed
+`step` here, `Ctrl-C` gets you back (same guest-freeze/interrupt
+behavior as anywhere else in KGDB), and no harm is done — just delete
+whatever you get and start again from `print mod->exit` above.
+
+Instead, break directly at that address:
+
+```gdb
+(gdb) break *0xffff80007c320640
+(gdb) continue
+```
+
+This *does* stop exactly where you want — but GDB shows it as `?? ()`
+with no name, and `next`/`bt` won't work there either, for the same
+underlying reason. For a fully working breakpoint (correct name,
+`next`/`bt`/`finish` all functional for anything it calls into),
+register the section's real address with GDB the same way
+`lx-symbols` itself does it for the sections it already knows about:
+
+```gdb
+(gdb) delete <the raw-address breakpoint's number>
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/12_wait_queues_blocking/wait_queues_blocking.ko -s .exit.text 0xffff80007c320640
+```
+
+(confirm the `(y or n)` prompt with `y` — GDB is just noting the file's
+already loaded and asking if you really want to add this extra section
+mapping on top). Now:
+
+```gdb
 (gdb) break wait_queues_blocking_exit
+Breakpoint N at 0x170: wait_queues_blocking_exit. (2 locations)
+```
+
+Two locations: `N.1` is still the old broken raw-offset one, `N.2` is
+the newly-relocated one — disable the first, keep the second:
+
+```gdb
+(gdb) disable N.1
 (gdb) continue
 ```
 ```bash
 # vmb:
 rmmod wait_queues_blocking
 ```
+
+This hits cleanly, with a real name — live-tested, it reported as
+`cleanup_module` rather than `wait_queues_blocking_exit`: the
+`module_exit()` macro aliases the function to the legacy `cleanup_module`
+symbol name too, the exact same mechanism lab 01/02 already cover for
+`init_module`.
+
 ```gdb
-Thread 2 hit Breakpoint N, wait_queues_blocking_exit () at wait_queues_blocking.c:222
-(gdb) next   # timer_shutdown_sync(&producer_timer)
+Thread N hit Breakpoint N.2, 0xffff80007c320644 in cleanup_module ()
 ```
 
-Read the source's own comment on this line before stepping past it:
-it explains that `rmmod` can never actually reach here while a reader
-is genuinely blocked in `bq_read()`, because `fops.owner =
+Read the source's own comment on the next line before stepping past
+it: it explains that `rmmod` can never actually reach here while a
+reader is genuinely blocked in `bq_read()`, because `fops.owner =
 THIS_MODULE` means every open fd holds a module reference for its
 whole lifetime, and `rmmod` refuses to unload a module with a nonzero
 reference count. If you still have a backgrounded `cat` from step 2/3
@@ -251,6 +502,32 @@ than this exit path ever running concurrently with a blocked reader —
 confirm it yourself: `kill` the backgrounded `cat` first, *then*
 `rmmod`.
 
+`next` inside `cleanup_module` itself won't have line-by-line
+resolution — the section relocation you just added fixes symbol *and*
+breakpoint addresses, but not the DWARF line table for code inside it,
+so GDB will tell you it's "single stepping until exit from function
+cleanup_module, which has no line number information." That's fine:
+`next` still correctly runs until it lands in whatever real,
+fully-resolved vmlinux function this code calls next (here,
+`timer_shutdown_sync`), which has full debug info as normal:
+
+```gdb
+(gdb) next
+timer_shutdown_sync (timer=0x... <producer_timer>) at kernel/time/timer.c:1717
+(gdb) finish
+Value returned is $N = 1
+```
+
+`timer_shutdown_sync()`'s return value matters: `1` here means a
+pending/active timer actually existed and was cancelled by this call
+(0 would mean it had already fired and there was nothing to cancel) —
+directly confirms the ordering the source comment warns about: this
+runs *before* the module's data is torn down, specifically so a
+still-in-flight `producer_fn()` can't race the unload.
+
+```gdb
+(gdb) continue
+```
 ```bash
 # vmb:
 poweroff -f
