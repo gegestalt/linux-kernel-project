@@ -20,6 +20,8 @@ check:
 		--file \
 		--strict \
 		--show-types \
+		--color=never \
+		--ignore=PREFER_PR_LEVEL \
 		printk_log_levels.c
 
 checkpatch: check
