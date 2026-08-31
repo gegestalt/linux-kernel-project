@@ -33,7 +33,7 @@ recommended path.
 
 ## QEMU path (recommended): the debug kernel, right here, no second VM
 
-QEMU supplies its own gdbstub (`-s`), so the isolation Track 2
+QEMU supplies its own gdbstub (`-s`), so the isolation this workflow
 fundamentally needs — something has to freeze at a breakpoint without
 taking down the machine GDB runs on — comes from the QEMU *process*
 being a separate, disposable thing GDB controls from outside, not from a
