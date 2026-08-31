@@ -199,11 +199,163 @@ echo pull-up | sudo tee /sys/devices/platform/gpio-sim.0/$GPIOCHIP/sim_gpio20/pu
 (gdb) print *state                  # the whole driver state struct, live
 ```
 
-Two more useful breakpoints for this specific module: `gpioctrl_write`
-(to watch the `invert=`/`poll_ms=`/`sync`/`reset_stats` command parser
-decide which branch to take) and `gpioctrl_work_fn` (to catch the
-periodic poll running from a `kworker` — `lx-ps` right after hitting it
-will show you which one). `watch state->samples` is a clean way to stop
-the instant the poll counter increments, without needing a function
-breakpoint at all.
+All the breakpoint targets below were confirmed against real compiled
+debug info before being written down:
+
+```bash
+$ gdb -q -batch -nx -ex "file gpioctrl.ko" \
+    -ex "info line gpioctrl_init" -ex "info line gpioctrl_exit" \
+    -ex "info line gpioctrl_write" -ex "info line gpioctrl_work_fn" \
+    -ex "ptype struct gpioctrl_state" gpioctrl.ko
+Line 1056 of "gpioctrl.c" starts at address 0x1dd0 <gpioctrl_init> ...
+Line 175 of ".../timekeeping.h" starts at address 0x1c58 <gpioctrl_exit> ...
+Line 856 of "gpioctrl.c" starts at address 0xce8 <gpioctrl_write> ...
+Line 324 of "gpioctrl.c" starts at address 0xc10 <gpioctrl_work_fn> ...
+type = struct gpioctrl_state {
+    struct mutex lock;
+    int button;
+    int led;
+    bool invert;
+    unsigned int poll_ms;
+    u64 samples;
+    u64 changes;
+    u64 output_updates;
+    u64 loaded_at_ns;
+    pid_t init_pid;
+    char init_comm[16];
+    pid_t last_sample_pid;
+    char last_sample_comm[16];
+}
+```
+
+That `gpioctrl_exit` line is a genuine, worth-knowing DWARF quirk, not a
+mistake: the *very first* statement inside `gpioctrl_exit()` is
+`start_ns = ktime_get_ns();`, and `ktime_get_ns()` is a `static inline`
+function defined in the kernel's own `timekeeping.h` — so the function's
+entry address maps to that inlined callee's source line, not
+`gpioctrl_exit`'s own opening brace. `info address gpioctrl_exit` still
+correctly reports a real function address, and `break gpioctrl_exit`
+still sets a perfectly good breakpoint there — GDB is just being
+literal about which source line owns the very first machine
+instruction, and that line happens to belong to an inlined header
+function.
+
+**`gpioctrl_init` — the resource-acquisition sequence, including its
+error paths.** This lab's `init` does more real work than any other in
+the repo: `kzalloc`, GPIO chip/descriptor lookup, direction
+configuration, `misc_register`, `sysfs_create_group`, then
+`schedule_delayed_work` — five things that can each fail, each with its
+own `goto` target.
+
+```bash
+sudo modprobe gpio-sim
+sudo mkdir -p /sys/kernel/config/gpio-sim/gpio-device/node0
+echo 22 | sudo tee /sys/kernel/config/gpio-sim/gpio-device/node0/num_lines
+echo 1  | sudo tee /sys/kernel/config/gpio-sim/gpio-device/live
+```
+```gdb
+(gdb) break do_init_module
+(gdb) continue
+```
+```bash
+sudo insmod ./gpioctrl.ko
+```
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break gpioctrl_init
+(gdb) continue
+(gdb) next                     # past kzalloc() - state now points at real, zeroed memory
+(gdb) print state
+(gdb) print *state              # everything zero except what mutex_init() touches next
+(gdb) next                       # mutex_init(), then the button/led/poll_ms/invert defaults
+(gdb) next
+(gdb) print state->poll_ms       # matches initial_poll_ms (module param, default 500)
+(gdb) next                        # past gpio_device_find_by_label()
+(gdb) print gdev                   # non-NULL if gpio-sim's device was found by that exact label
+(gdb) next                          # past gpio_device_get_desc() x2 - button and led descriptors
+(gdb) print button
+(gdb) print led
+(gdb) finish                         # run to return - watch the return value: 0 means every step succeeded
+```
+
+Rerun with a *wrong* `gpio_label` (`sudo insmod ./gpioctrl.ko
+gpio_label=gpio-sim.0:doesnotexist`) and step through the same sequence
+— `gpio_device_find_by_label()` returns `NULL`, `print gdev` shows it,
+and `next` walks straight to the `err_free_state:` label instead of
+continuing down the happy path. Watching the *actual* branch taken beats
+reading the `goto` labels in the source.
+
+**`gpioctrl_write` — the `/dev/gpioctrl` command parser**, one
+breakpoint, four different real inputs:
+
+```gdb
+(gdb) break gpioctrl_write
+(gdb) continue
+```
+```bash
+echo "invert=1"    | sudo tee /dev/gpioctrl
+```
+```gdb
+(gdb) print count            # the exact byte count "invert=1\n" produced
+(gdb) next                    # step through copy_from_user(), kbuf[count]='\0', strim()
+(gdb) print cmd                # "invert=1" - null-terminated, trimmed
+(gdb) next                      # into the sysfs_streq()/strncmp() chain deciding which branch
+(gdb) continue                   # let it finish, hit the breakpoint again on the NEXT write
+```
+```bash
+echo "poll_ms=abc" | sudo tee /dev/gpioctrl    # deliberately malformed
+```
+```gdb
+(gdb) print cmd               # "poll_ms=abc"
+(gdb) next                     # kstrtouint() on "abc" - watch `ret` come back non-zero
+(gdb) print ret
+(gdb) finish                    # returns ret itself (a negative errno), not count - confirm at the shell:
+```
+```bash
+echo "poll_ms=abc" | sudo tee /dev/gpioctrl
+# tee: /dev/gpioctrl: Invalid argument
+```
+
+**`gpioctrl_work_fn` — catch the periodic poll running from a
+`kworker`**, not from any shell command at all:
+
+```gdb
+(gdb) break gpioctrl_work_fn
+(gdb) continue
+```
+
+No trigger needed — it fires on its own every `poll_ms` (500ms by
+default). When it hits: `print current->comm` and `print current->pid`
+(a real `kworker/N:M`, not your shell), then `next` through
+`gpioctrl_sample_once()`'s call and the `mod_delayed_work()`/
+`schedule_delayed_work()` reschedule at the end — the exact mechanism
+that keeps this callback running forever until `gpioctrl_exit()` calls
+`cancel_delayed_work_sync()`.
+
+**`gpioctrl_exit` — the cleanup ordering**, and why it's ordered the
+way it is:
+
+```gdb
+(gdb) break gpioctrl_exit
+(gdb) continue
+```
+```bash
+sudo rmmod gpioctrl
+```
+```gdb
+(gdb) next    # cancel_delayed_work_sync() FIRST - no poll can touch state after this line
+(gdb) next     # THEN sysfs_remove_group() - userspace can't reach state's sysfs files anymore
+(gdb) next      # THEN misc_deregister() - /dev/gpioctrl is gone
+(gdb) print state->samples   # still readable here - state itself isn't freed until kfree() near the end
+(gdb) finish
+```
+
+Deliberately reorder those three calls in the source (`kfree(state)`
+before `cancel_delayed_work_sync()`, say) and reason through what a
+still-running `kworker` calling into `gpioctrl_work_fn` would dereference
+— this is the exact use-after-free shape `cancel_delayed_work_sync()`
+being called *first* prevents. `watch state->samples` (no function
+breakpoint needed) is the cleanest way to catch the poll counter
+incrementing from a completely different trigger — a real button press
+via `sim_gpio20/pull` — without stopping anywhere else first.
 
