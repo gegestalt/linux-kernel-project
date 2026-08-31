@@ -131,6 +131,10 @@ make clean
 
 ## Debugging with GDB
 
+For a full, self-contained, step-by-step session for this lab — tmux
+pane layout, every command, every output explained — see
+[`GDB_WALKTHROUGH.md`](GDB_WALKTHROUGH.md).
+
 Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab's own
 premise — "`dmesg -w` isn't the whole picture" — is exactly what
 `lx-dmesg` fixes: it reads the ring buffer straight out of kernel

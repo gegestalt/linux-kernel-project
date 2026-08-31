@@ -73,7 +73,9 @@ make clean
 
 ## Debugging with GDB
 
-Full environment setup (debug kernel build, KGDB-over-serial, `lx-symbols`)
+For a full, self-contained, step-by-step session for this lab — tmux
+pane layout, every command, every output explained — see
+[`GDB_WALKTHROUGH.md`](GDB_WALKTHROUGH.md). Full environment setup (debug kernel build, KGDB-over-serial, `lx-symbols`)
 is in [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Both breakpoint
 targets below were confirmed to resolve to real, compiled debug info
 before being written down here:
