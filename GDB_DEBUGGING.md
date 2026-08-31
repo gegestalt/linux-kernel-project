@@ -3,108 +3,156 @@
 `dmesg -w` tells you what a module *decided to say*. GDB tells you what
 it actually *did* — every variable, every branch taken, every call into
 another subsystem's code, one line at a time, on the real running kernel.
-This document is the one-time environment setup and the general
-workflow; each lab's own `README.md` has a short **Debugging with GDB**
-section at the end with the specific breakpoints and things to look at
-for that lab.
+This document is the environment setup and the general workflow; each
+lab's own `README.md` has a short **Debugging with GDB** section with
+the specific breakpoints for that lab, and the quick-reference table
+near the end of this file lists all of them in one place for a live
+session.
 
 Based on the official kernel documentation:
 <https://www.kernel.org/doc/html/latest/dev-tools/gdb-kernel-debugging.html>
 
-## Why KGDB-over-serial, not a hypervisor gdbstub
+## 0. The topology: two VMs, not one
 
-QEMU has a built-in gdbstub (`-s`) that's the simplest possible setup —
-if you ever run a lab under QEMU, prefer it. But this repo's environment
-is VMware/Apple Virtualization, and neither exposes an equivalent
-first-class stub the way QEMU does (VMware has a proprietary one that's
-fiddlier to wire up; AVF has none at all). **KGDB-over-serial** lives
-entirely inside the guest kernel and doesn't depend on hypervisor
-support at all, so it's the one method that works identically on
-VMware, AVF/UTM, real hardware, or QEMU.
+This machine (call it **VM A**) is itself a VMware guest — running GDB
+*and* the kernel being debugged on the same VM doesn't work: a live KGDB
+breakpoint halts the entire machine, including whatever's driving GDB.
+So the setup is two VMs under the same VMware installation:
 
-## A scoping note before you start
+```
+VM A (this machine, stays up)              VM B (disposable target)
+┌─────────────────────────┐    serial     ┌─────────────────────────┐
+│ gdb vmlinux              │◄─────────────►│ boots the debug kernel   │
+│ you type commands here   │               │ gets insmod'd, hits      │
+│ never freezes            │               │ breakpoints, freezes     │
+└─────────────────────────┘               └─────────────────────────┘
+```
 
-Every lab in this repo so far has been built as an *out-of-tree module*
-against your distro's prebuilt kernel headers
-(`/lib/modules/$(uname -r)/build`). Those never ship a `vmlinux` with
-debug symbols — distro header packages are headers only. GDB-level
-kernel debugging needs a `vmlinux` you built yourself, with debug info,
-that's the exact kernel you're booting. You already have the source for
-this in `linux_mainline/` — this is the point where you actually build
-and boot it, which is a bigger step than anything else in this repo.
-Budget real time and disk space for it.
+VM B is expendable on purpose: snapshot it right after setup, and revert
+in one click if a lab panics it or a bad `grub` entry strands it —
+that's what makes it safe to actually hit breakpoints and step through
+code that could, in principle, go wrong.
 
-## 1. Build a debug kernel
+## 1. Create VM B
+
+In VMware: **clone VM A** (`File → Clone → Full Clone`) rather than
+installing fresh — this guarantees VM B has the exact same userland,
+`libgpiod`, `linux_mainline` checkout, and this repo already in place.
+Give it a distinct name (`linux-kernel-project-debug-target`).
+
+**Immediately after the clone, before doing anything else:**
+`VM → Snapshot → Take Snapshot`. This is the actual safety net for
+everything that follows.
+
+## 2. Build the debug kernel (on VM A)
 
 ```bash
 cd linux_mainline
-cp /boot/config-$(uname -r) .config   # or: make defconfig
-make menuconfig
+sudo apt install -y flex bison libssl-dev libelf-dev   # build prerequisites
+cp /usr/src/linux-headers-$(uname -r)/.config .config    # seed from the running config
+sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-kgdb-debug"/' .config
+make olddefconfig
 ```
 
-Enable, under *Kernel hacking*:
-
-| Option | Why |
-|---|---|
-| `CONFIG_DEBUG_INFO=y` (older kernels) / `CONFIG_DEBUG_INFO_DWARF4=y` (a *choice* on 6.x) | Full DWARF debug info in `vmlinux`. Without it GDB can't map addresses to source lines. Avoid `CONFIG_DEBUG_INFO_REDUCED` — it strips type info the `lx-*` scripts need. |
-| `CONFIG_GDB_SCRIPTS=y` | Generates `scripts/gdb/vmlinux-gdb.py` + the `lx-*` Python helpers, and a `vmlinux-gdb.py` symlink at the top of your build directory. |
-| `CONFIG_KGDB=y` | The in-kernel debug stub. |
-| `CONFIG_KGDB_SERIAL_CONSOLE=y` (or equivalent, under the KGDB submenu — exact wording drifts a little by version) | Gives you the `kgdboc=` boot parameter. |
-| `CONFIG_MAGIC_SYSRQ=y` | Trigger a break-in on demand (`sysrq-g`) instead of freezing every boot with `kgdbwait`. |
-| `CONFIG_FRAME_POINTER=y` | Extra help for stack unwinding alongside the ORC unwinder. |
-| `CONFIG_KALLSYMS=y`, `CONFIG_KALLSYMS_ALL=y` | Usually already on; needed for symbol resolution generally. |
+The running kernel's own config already has everything needed
+(`CONFIG_DEBUG_INFO=y`, `CONFIG_GDB_SCRIPTS=y`, `CONFIG_KGDB=y`,
+`CONFIG_KGDB_SERIAL_CONSOLE=y`, `CONFIG_MAGIC_SYSRQ=y`), which is why
+seeding from it rather than starting from `defconfig` saves a trip
+through `menuconfig`. The `LOCALVERSION` change matters: it makes
+`uname -r` for this kernel end in `-kgdb-debug`, so it's unmistakably
+different from the one already installed and gets its own `/lib/modules/`
+directory and its own GRUB entry rather than colliding with anything.
 
 ```bash
-make -j$(nproc)
-sudo make modules_install install   # inside the VM you intend to debug
+make -j3      # leave one core free; this is a full kernel build, budget real time
 ```
 
-## 2. Wire up a dedicated serial port for KGDB
+This produces `vmlinux` (with full debug info — this is what GDB will
+load) and the compressed boot image under `arch/arm64/boot/`.
 
-Keep your normal console (`ttyS0`/`hvc0`) untouched; add a second,
-dedicated port for the debugger:
+## 3. Install it on VM B, as an *additional*, non-default entry
 
-- **VMware**: VM Settings → Add → Serial Port → *Output to named pipe*,
-  "This end is the server", "The other end is an application", enable
-  *Yield CPU on poll*. On the host, bridge the pipe to something GDB can
-  attach to:
-  ```bash
-  socat -d -d PTY,link=/tmp/kgdb-pty,raw,echo=0 PIPE:/path/to/vmware/pipe
-  ```
-- **Apple Virtualization / UTM**: on the native AVF backend, add a
-  serial device backed by a Unix socket or pty (the exact UI depends on
-  the tool). If that's painful, switch that one VM to UTM's **QEMU**
-  backend instead — same guest kernel, same KGDB config, and you also
-  get QEMU's `-s` gdbstub as a fallback.
-- **Escape hatch**: `qemu-system-x86_64 -kernel .../bzImage -serial pty
-  ...` and point GDB at whatever pty QEMU prints. Zero hypervisor-serial
-  plumbing, useful if VMware/AVF wiring becomes the bottleneck rather
-  than the kernel debugging itself.
+Copy the build tree to VM B (shared folder, `scp`, or since VM B is a
+clone of VM A, `linux_mainline/` is already there — just `git pull`/copy
+the same commit and re-run steps 2's `make` on VM B directly instead of
+transferring binaries, which sidesteps any path-dependent build
+artifacts entirely). Then, **on VM B**:
 
-Guest kernel command line (for iterative work — **not** `kgdbwait`,
-which halts boot until GDB attaches every single time):
+```bash
+cd linux_mainline
+sudo make modules_install
+sudo make install                 # adds a new /boot entry, does NOT touch the existing default
+```
+
+Confirm the existing kernel is still the default before rebooting:
+
+```bash
+awk -F\' '/menuentry / {print $2}' /boot/grub/grub.cfg   # find the new entry's exact name
+sudo grep '^GRUB_DEFAULT' /etc/default/grub               # should still point at the old kernel or "0"
+```
+
+If you want the new kernel to boot *this once* without permanently
+changing the default:
+
+```bash
+sudo grub-reboot "Advanced options for Ubuntu>Ubuntu, with Linux 7.0.0-30-kgdb-debug"
+sudo reboot
+```
+
+`grub-reboot` only affects the next boot — if the new kernel fails to
+come up cleanly, the *following* reboot falls back to the known-good
+default automatically. (Or just use the snapshot from step 1 if it's
+worse than that.)
+
+## 4. Wire a serial line between VM A and VM B
+
+**Preferred — network-backed serial**, since VM A and VM B are sibling
+VMs on the same virtual network rather than host+guest: in VM B's
+Settings → Serial Port, add a port set to connect **via network**
+(exact wording varies by VMware version — look for "Use network" /
+"Connect via network"; some versions phrase it as a Telnet URI). Set it
+to listen as a server on a port, e.g. `5555`. No serial device is needed
+on VM A's side at all — GDB connects to it directly over IP:
+
+```
+(gdb) target remote <VM_B_ip>:5555
+```
+
+**Fallback — named pipe**, only if you end up driving GDB from the real
+physical host instead of from VM A: VM B Settings → Serial Port →
+*Output to named pipe*, "This end is the server", "The other end is an
+application", enable *Yield CPU on poll*. On the physical host:
+
+```bash
+socat -d -d PTY,link=/tmp/kgdb-pty,raw,echo=0 PIPE:/path/to/vmware/pipe
+```
+
+Either way, guest kernel command line on VM B (edit via `grub-reboot`'s
+menu, or `/etc/default/grub`'s `GRUB_CMDLINE_LINUX` + `update-grub`, or
+directly at the GRUB prompt for a one-off test):
 
 ```
 kgdboc=ttyS1,115200
 ```
 
-Trigger a break-in on demand, right before whatever you want to catch:
+— `ttyS1`, keeping `ttyS0`/the console untouched. Trigger a break-in on
+demand from VM B once it's booted:
 
 ```bash
 echo g | sudo tee /proc/sysrq-trigger
 ```
 
-## 3. Attach and load symbols
+## 5. Attach and load symbols (on VM A)
 
 ```bash
-cd linux_mainline           # your build directory
+cd linux_mainline
 gdb vmlinux
 ```
 
 ```gdb
-(gdb) set auto-load safe-path /        # or add-auto-load-safe-path <builddir>, once, in ~/.gdbinit
-(gdb) target remote /tmp/kgdb-pty      # or host:port, per your serial bridge
-(gdb) lx-version                        # sanity check: matches the running kernel?
+(gdb) set auto-load safe-path /
+(gdb) target remote <VM_B_ip>:5555      # or the pty path, per section 4
+(gdb) lx-version                         # confirm it matches VM B's running kernel
 ```
 
 `vmlinux`'s own symbols work immediately (`break do_init_module`, `bt`,
@@ -112,10 +160,10 @@ gdb vmlinux
 runtime-only address the kernel picked when it `vmalloc()`'d module
 memory in, different on every `insmod`.
 
-**Manual symbol loading** (worth doing once to understand the mechanism):
+**Manual symbol loading** (worth doing once to understand the mechanism
+— on VM B, after `insmod`):
 
 ```bash
-# in the guest, after insmod:
 cat /sys/module/<modname>/sections/.text
 cat /sys/module/<modname>/sections/.data
 cat /sys/module/<modname>/sections/.bss
@@ -132,25 +180,21 @@ cat /sys/module/<modname>/sections/.bss
 ```
 
 Does the `/sys/module/.../sections/*` lookup and `add-symbol-file` for
-every currently-loaded module under that path, and arms a hook so any
-module you `insmod` *afterward* gets its symbols loaded automatically.
-Run it once near the top of a session; re-run it any time you need to
-pick up a module that was loaded before the hook was armed (e.g. right
-after breaking in `do_init_module`, before the new module's own `init`
-has returned).
+every currently-loaded module under that path (on VM B, reached over
+the `target remote` connection), and arms a hook so any module you
+`insmod` *afterward* gets its symbols loaded automatically.
 
-## 4. General breakpoint pattern for "break inside my module's init"
+## 6. General breakpoint pattern for "break inside my module's init"
 
 Function-name breakpoints only resolve once GDB has that function's
-symbol — which for a `.ko` means *after* `lx-symbols` has seen it. So
-the sequence for catching your own `init` function is:
+symbol — which for a `.ko` means *after* `lx-symbols` has seen it:
 
 ```gdb
 (gdb) break do_init_module      # generic hook every module's init runs through — always resolvable
 (gdb) continue
 ```
 ```bash
-# guest:
+# on VM B:
 sudo insmod ./your_module.ko
 ```
 ```gdb
@@ -161,23 +205,44 @@ sudo insmod ./your_module.ko
 ```
 
 From here: `next`/`step` line by line, `print <var>`, `bt`, `finish` to
-run to the end of the current function, `watch <var>` to stop the moment
-something changes.
-
-Once a module's symbols are loaded, you can also break directly on any
-of its other functions (`break rw_write`, `break gpioctrl_sample_once`,
-...) without repeating the `do_init_module` dance — only the *first*
-function GDB needs to resolve for a not-yet-loaded module needs this.
+run to the end of the current function, `watch <var>` to stop the
+moment something changes. Once a module's symbols are loaded, break
+directly on any of its other functions without repeating this dance.
 
 **Before you detach**, always `delete` breakpoints (or `continue` past
-them). A breakpoint left armed with GDB disconnected will hang the guest
+them) on VM B. A breakpoint left armed with GDB disconnected hangs VM B
 indefinitely waiting for a debugger that isn't there.
 
-## 5. Useful `lx-*` helpers
+## 7. Per-lab quick reference
+
+Every function below was already confirmed to resolve to real,
+compiled debug info (`gdb -batch -ex "info line <func>" <module>.ko`) —
+see each lab's own README for the full trigger commands.
+
+| Lab | Module | Break on |
+|---|---|---|
+| 01 | `hello.ko` | `init_module`, `cleanup_module` |
+| 02 | `better_hello.ko` | `my_init`, `my_exit` |
+| 03 | `gpioctrl.ko` | `gpioctrl_init`, `gpioctrl_sample_once`, `gpioctrl_write`, `gpioctrl_work_fn` |
+| 04 | `module_params.ko` | `module_params_init`, `module_params_read` |
+| 05 | `register_cdev.ko` | `register_cdev_init`, `register_cdev_open`, `register_cdev_read` |
+| 06 | `procfs_seqfile.ko` | `events_seq_start`, `events_seq_next`, `events_seq_show`, `events_seq_stop`, `info_show` |
+| 07 | `printk_log_levels.ko` | `printk_log_levels_init`, `printk_emit_all_levels` |
+| 08 | `open_release_cdev.ko` | `my_open`, `my_release` |
+| 09 | `read_write_cdev.ko` | `read_write_cdev_init`, `rw_read`, `rw_write` |
+| 10 | `ioctl_basics.ko` | `ioctl_basics_init`, `ioctl_basics_ioctl` |
+| 11 | `concurrency_locking.ko` | `increment_once`, `race_write` |
+| 12 | `wait_queues_blocking.ko` | `producer_fn`, `bq_read`, `bq_poll` |
+| 13 | `kernel_memory.ko` | `do_allocate`, `do_free` |
+| 14 | `timers_workqueues.ko` | `heartbeat_timer_fn`, `heartbeat_work_fn` |
+| 15 | `kthreads.ko` | `producer_thread_fn`, `start_producer`, `stop_producer`, `kthread_should_stop` |
+| 16 | `debugfs_sysfs.ko` | `enabled_store`, `increment_store`, `info_read` |
+
+## 8. Useful `lx-*` helpers
 
 The direct answer to "`dmesg -w` isn't enough": **`lx-dmesg`** reads the
-ring buffer straight out of kernel memory, so it works *while the guest
-is frozen at a breakpoint* — no live system required.
+ring buffer straight out of kernel memory, so it works *while VM B is
+frozen at a breakpoint* — no live system required.
 
 ```gdb
 (gdb) lx-dmesg                        # full ring buffer, offline, at this exact frozen instant
@@ -186,7 +251,7 @@ is frozen at a breakpoint* — no live system required.
 (gdb) print *$lx_current()            # full task_struct of whatever's currently stopped
 (gdb) lx-device-list-class("misc")    # walk the driver model - confirm a misc device registered
 (gdb) lx-cpus                         # per-CPU state
-(gdb) lx-version                       # confirm vmlinux matches the running kernel
+(gdb) lx-version                       # confirm vmlinux matches VM B's running kernel
 ```
 
 `lx-version` first, every session — attaching to a `vmlinux` that
@@ -202,3 +267,18 @@ functions from the GDB prompt the way a userspace GDB session can
 to wedge it if it *does* appear to work. Stick to reading state
 (`print`, `x/`, `watch`) rather than calling into kernel code from the
 debugger.
+
+## Static verification, without any of the above
+
+Every breakpoint target in the table above can be confirmed against
+real compiled debug info with no VM B, no KGDB, and no root at all —
+useful for checking a target resolves before committing to a live
+session, or if you just want to see the DWARF info is really there:
+
+```bash
+cd NN_lab_name && make
+gdb -q -batch -nx -ex "file module.ko" -ex "info line function_name" module.ko
+```
+
+`file module.ko` should report `with debug_info, not stripped`; `info
+line` should report a real `file.c:LINE` and address, not an error.
