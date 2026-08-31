@@ -177,3 +177,28 @@ driver's — if `break enabled_store` behaves strangely, that's why; use
 `break debugfs_sysfs.c:84` (or wherever `enabled_store` actually starts
 in the file) to disambiguate by location instead.
 
+**`counter_show`/init/exit**, verified:
+
+```bash
+$ gdb -q -batch -nx -ex "file debugfs_sysfs.ko" \
+    -ex "info line counter_show" -ex "info line debugfs_sysfs_init" \
+    -ex "info line debugfs_sysfs_exit" debugfs_sysfs.ko
+Line 57 ... <counter_show> ...
+Line 171 ... <debugfs_sysfs_init> ...
+Line 207 ... <debugfs_sysfs_exit> ...
+```
+
+`break counter_show`, `cat /sys/kernel/debugfs_sysfs_demo/counter`, and
+`print counter` — the exact same global variable `enabled_store`/
+`increment_store` write and `counter_raw` pokes directly, now read back
+through the one function this driver actually wrote to expose it.
+
+`break debugfs_sysfs_init`, and step through `sysfs_create_group()`
+followed by the *unchecked* `debugfs_create_dir()`/`debugfs_create_u32()`/
+`debugfs_create_bool()`/`debugfs_create_file()` calls — `print
+demo_debugfs_dir` after each one still shows a real pointer (or a
+harmless dummy on a kernel without `CONFIG_DEBUG_FS`), the live
+confirmation of this lab's own comment that debugfs setup failure is
+never treated as fatal here, unlike the `sysfs_create_group()` call just
+before it which *is* checked and *does* unwind on failure.
+

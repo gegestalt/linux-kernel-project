@@ -166,3 +166,31 @@ versus trying the same `step` on `might_sleep()` in the timer path
 `CONFIG_DEBUG_ATOMIC_SLEEP`, confirming the "harmless no-op" claim from
 this lab's README empirically instead of by assertion).
 
+**`format_ctx`/init/exit**, verified — `format_ctx` resolves as its own
+symbol here (unlike similarly-small helpers elsewhere in this repo that
+got inlined):
+
+```bash
+$ gdb -q -batch -nx -ex "file timers_workqueues.ko" \
+    -ex "info line format_ctx" -ex "info line timers_workqueues_init" \
+    -ex "info line timers_workqueues_exit" timers_workqueues.ko
+Line 61 ... <format_ctx> ...
+Line 166 ... <timers_workqueues_init> ...
+Line 195 ... <timers_workqueues_exit> ...
+```
+
+`break format_ctx`, `continue`, and let it hit naturally from either
+callback — `print in_softirq()`, `print in_task()`, `print
+preemptible()` *at the exact same breakpoint*, called from two different
+contexts on two different hits, is the single clearest way to see this
+lab's whole point: identical code, radically different answers depending
+on who called it. `bt` immediately after hitting `format_ctx` shows
+which of the two callbacks you're inside without needing to check
+anything else.
+
+`break timers_workqueues_exit`, `rmmod`, and step through
+`timer_shutdown_sync(&heartbeat_timer)` followed by
+`cancel_delayed_work_sync(&heartbeat_work)` — two different
+"wait for any in-flight callback and guarantee no more will run"
+primitives, one per mechanism, called back to back.
+

@@ -174,3 +174,42 @@ once `lx-symbols` has loaded), `continue`, then from the guest
 here on the very next loop check after `kthread_stop()` wakes the
 thread, before it actually returns from `producer_thread_fn()`.
 
+**`start_producer`/`stop_producer`/`control_store`/init/exit**, all
+verified:
+
+```bash
+$ gdb -q -batch -nx -ex "file kthreads.ko" \
+    -ex "info line start_producer" -ex "info line stop_producer" \
+    -ex "info line control_store" -ex "info line kthreads_init" \
+    -ex "info line kthreads_exit" kthreads.ko
+Line 100 ... <start_producer> ...
+Line 122 ... <stop_producer> ...
+Line 229 ... <control_store> ...
+Line 270 ... <kthreads_init> ...
+Line 306 ... <kthreads_exit> ...
+```
+
+```gdb
+(gdb) break start_producer
+(gdb) continue
+```
+```bash
+echo start | sudo tee /sys/kernel/kthreads_demo/control
+```
+```gdb
+(gdb) print producer_task          # NULL - about to be created
+(gdb) next                          # kthread_run() itself
+(gdb) print producer_task            # a real struct task_struct * now
+(gdb) print producer_task->pid         # matches what /sys/kernel/kthreads_demo/status reports next
+(gdb) finish
+```
+
+`break stop_producer`, trigger with `echo stop | sudo tee
+/sys/kernel/kthreads_demo/control`, and step through: `producer_task` is
+copied to a local and the global set to `NULL` **before**
+`kthread_stop()` is even called — `print producer_task` right after that
+`next` already shows `NULL`, even though the thread is still running and
+will be for a few more lines. Worth pausing on: this ordering means a
+second `stop` request racing in couldn't get a stale pointer,
+independent of anything `kthread_stop()` itself does.
+
