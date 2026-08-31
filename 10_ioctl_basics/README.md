@@ -147,3 +147,61 @@ deliberately-unknown command that falls through to `default: return
 shows the transformed `req.buf` right before it's copied back to
 userspace.
 
+`apply_mode_transform()` — the function that actually does the
+upper-casing/reversing — has no symbol of its own; verification found
+its address inside `ioctl_basics_ioctl` (`ioctl_basics_ioctl+716`), so
+it's inlined into the `ECHO` case rather than being a real call. To
+watch the transform itself, break on `ioctl_basics_ioctl`, `continue`
+until you're in the `IOCTL_BASICS_ECHO` case (`print cmd` to confirm),
+then `next` through — the inlined transform's `for` loop is right there
+in the same stack frame:
+
+```gdb
+(gdb) print req.buf         # the string as it arrived, before transformation
+(gdb) next                    # steps straight through apply_mode_transform()'s loop, no separate break needed
+(gdb) print req.buf             # transformed - upper-cased or reversed, depending on `mode`
+```
+
+**`ioctl_basics_init`/`ioctl_basics_exit`/`ioctl_basics_open`**, and
+`struct ioctl_basics_stats`, all verified:
+
+```bash
+$ gdb -q -batch -nx -ex "file ioctl_basics.ko" \
+    -ex "info line ioctl_basics_init" -ex "info line ioctl_basics_exit" \
+    -ex "info line ioctl_basics_open" -ex "ptype struct ioctl_basics_stats" ioctl_basics.ko
+Line 159 of "ioctl_basics.c" starts at address 0xb60 <ioctl_basics_init> ...
+Line 203 of "ioctl_basics.c" starts at address 0xc90 <ioctl_basics_exit> ...
+Line 28 of "ioctl_basics.c" starts at address 0x148 <ioctl_basics_open> ...
+type = struct ioctl_basics_stats {
+    __u64 reads;
+    __u64 echoes;
+    __u64 resets;
+    __u32 mode;
+}
+```
+
+`ptype`ing the stats struct once is worth it because it's exactly the
+shape `IOCTL_BASICS_GET_STATS` copies to userspace — at any breakpoint
+inside the `GET_STATS` case, `print stats` (the module-global instance)
+shows precisely what `ioctl_test` is about to receive, before
+`copy_to_user()` even runs:
+
+```gdb
+(gdb) break ioctl_basics_init
+(gdb) continue    # after the usual do_init_module -> insmod -> lx-symbols dance
+(gdb) next          # alloc_chrdev_region()
+(gdb) next            # cdev_init()/cdev_add()
+(gdb) next              # class_create()/device_create()
+(gdb) finish
+(gdb) break ioctl_basics_exit
+(gdb) continue
+```
+```bash
+sudo rmmod ioctl_basics
+```
+```gdb
+(gdb) print stats.resets    # matches this lab's own dmesg exit line exactly
+(gdb) print stats.echoes
+(gdb) finish
+```
+
