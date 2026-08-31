@@ -156,3 +156,33 @@ make clean
   compare timing against the non-zeroing versions at a large size — the
   zeroing pass is real work, and vmalloc's zeroing in particular touches
   every page it just mapped.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break do_allocate
+(gdb) continue
+```
+```bash
+echo "kmalloc 100" | sudo tee /sys/kernel/kernel_memory/allocate
+```
+```gdb
+(gdb) next                # step past the switch() into the kmalloc() call
+(gdb) finish                # run to return - `ptr` is now a real slab pointer
+(gdb) print ptr
+(gdb) print cur_actual_size   # already computed via ksize() by C code, not GDB
+```
+
+Note that last one: standard KGDB targets generally don't support
+calling arbitrary kernel functions from the prompt (`print ksize(ptr)`
+directly would be unreliable at best), which is exactly why this
+driver's own `cur_actual_size = ksize(ptr)` line matters — you're
+reading a value the *kernel* computed, not asking GDB to compute it.
+Rerun with `vmalloc` instead of `kmalloc` at the same breakpoint and
+compare `finish`'s reported time-to-return between the two — a rougher
+but real-time echo of the `last_alloc_ns` this lab's sysfs `info`
+attribute already reports.
+

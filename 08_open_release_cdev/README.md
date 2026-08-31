@@ -108,3 +108,30 @@ make clean         # also removes the cdev_test binary
   instead of closing it cleanly — confirm `release()` still runs (the
   kernel drops the reference on process exit regardless of how it exits)
   by checking `dmesg` and `active_opens` afterward.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab's whole
+point is the `dup()`/reference-counting behavior, which is exactly the
+kind of thing worth pausing mid-execution to actually see rather than
+inferring from log lines:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break my_open
+(gdb) break my_release
+(gdb) continue
+```
+```bash
+./cdev_test /dev/open_release_cdev0
+```
+
+At the `my_open` breakpoint: `next` past the `kzalloc()`, `print ctx`
+(your freshly allocated `struct open_context`), `next` again and
+`print active_opens` before vs. after the `atomic_inc_return()` line.
+For the `dup()` test specifically, stop at `my_release` and `print
+ctx->id` — confirm you only ever break here **once** for the pair of
+descriptors `test.c` duplicates, no matter how many times you'd expect
+"a close" to trigger it. `bt` at that breakpoint also shows the real VFS
+call chain (`__fput` → `...→ my_release`) rather than a raw `close()`.
+

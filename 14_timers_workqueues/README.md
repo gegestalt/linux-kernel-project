@@ -135,3 +135,34 @@ make clean
   work in my testing" is not the same as "is correct," and this is the
   cheapest possible way to watch that gap in person instead of taking it
   on faith.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Break on both
+callbacks and read their execution context directly out of the running
+kernel, rather than trusting the `format_ctx()` string the driver builds
+for you:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break heartbeat_timer_fn
+(gdb) continue
+```
+```gdb
+(gdb) finish            # let format_ctx() run, then...
+(gdb) print ctx          # "in_softirq=1 in_task=0 ..." - see it for yourself, not just in sysfs
+(gdb) break heartbeat_work_fn
+(gdb) continue
+(gdb) finish
+(gdb) print ctx           # "in_softirq=0 in_task=1 comm=kworker/..."
+```
+
+Since `might_sleep()` is a debug *check*, not a breakpoint-worthy event
+on its own, the more direct way to feel the context difference is
+`step`-ing into `usleep_range()` from `heartbeat_work_fn` (it actually
+descends into scheduler code — `bt` will show real sleep/wake frames)
+versus trying the same `step` on `might_sleep()` in the timer path
+(nothing to descend into on a kernel without
+`CONFIG_DEBUG_ATOMIC_SLEEP`, confirming the "harmless no-op" claim from
+this lab's README empirically instead of by assertion).
+

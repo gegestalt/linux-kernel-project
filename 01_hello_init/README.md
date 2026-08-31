@@ -70,3 +70,30 @@ make clean
   `insmod` — the module loads with no init/exit calls, since the kernel is
   matching those functions by exact symbol name, not by a registered
   callback.
+
+## Debugging with GDB
+
+Full environment setup (debug kernel build, KGDB-over-serial, `lx-symbols`)
+is in [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Once attached:
+
+```gdb
+(gdb) break do_init_module
+(gdb) continue
+```
+```bash
+sudo insmod ./hello.ko
+```
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break init_module
+(gdb) continue
+(gdb) next                 # step onto the printk() line itself
+(gdb) finish                # run to return, confirm the return value is 0
+```
+
+Because this module uses the legacy `init_module`/`cleanup_module` names
+directly (see what this lab demonstrates, above), those are literally the
+symbol names GDB resolves — no macro indirection to see through, which
+makes this the simplest possible first GDB session before trying a lab
+with real state to inspect.
+

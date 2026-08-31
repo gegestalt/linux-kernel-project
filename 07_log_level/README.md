@@ -128,3 +128,30 @@ make clean
   including messages from *other* subsystems). A tame version: load/unload
   this module in a loop 50 times and see how much of the earlier output
   survives in `dmesg`.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab's own
+premise — "`dmesg -w` isn't the whole picture" — is exactly what
+`lx-dmesg` fixes: it reads the ring buffer straight out of kernel
+memory, so it works even with the guest frozen mid-breakpoint.
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break printk_emit_all_levels
+(gdb) continue
+```
+```bash
+sudo insmod ./printk_log_levels.ko
+```
+```gdb
+(gdb) next                  # step across each pr_emerg()/pr_alert()/.../pr_debug() call in turn
+(gdb) lx-dmesg               # see each line land in the ring buffer, live, one at a time
+```
+
+Stepping one `pr_*()` call at a time and re-running `lx-dmesg` after each
+`next` is the clearest possible way to see that every priority reaches
+the ring buffer unconditionally — the console-loglevel filtering this
+lab's README discusses only ever affects the *live console*, never what
+`lx-dmesg`/`dmesg` can retrieve afterward.
+
