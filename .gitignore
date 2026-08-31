@@ -1,0 +1,33 @@
+# --- Kbuild / kernel module build artifacts ---
+# Every lab is built out-of-tree against /lib/modules/$(uname -r)/build,
+# which litters each lab directory with generated files. None of this is
+# portable across kernels/machines, so none of it belongs in git.
+*.o
+*.o.cmd
+*.ko
+*.ko.cmd
+*.mod
+*.mod.c
+*.mod.o
+*.mod.cmd
+Module.symvers
+Module.symvers.cmd
+Module.markers
+modules.order
+modules.order.cmd
+.module-common.o
+..module-common.o.cmd
+.tmp_versions/
+.cache.mk
+*.symvers
+*.dwo
+*.d
+*~
+
+# checkpatch.pl caches a camelCase identifier list next to whatever it
+# just scanned (see 05_register_cdev's Makefile `check` target).
+.checkpatch-camelcase.*
+
+# Compiled userspace test helpers (see e.g. 08_open_release_cdev/test.c).
+# Keep the source, drop the binary.
+cdev_test
