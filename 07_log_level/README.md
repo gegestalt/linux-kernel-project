@@ -136,22 +136,53 @@ premise — "`dmesg -w` isn't the whole picture" — is exactly what
 `lx-dmesg` fixes: it reads the ring buffer straight out of kernel
 memory, so it works even with the guest frozen mid-breakpoint.
 
+Verified first, and worth reading before the walkthrough below:
+
+```bash
+$ gdb -q -batch -nx -ex "file printk_log_levels.ko" \
+    -ex "info line printk_log_levels_init" -ex "info line printk_emit_all_levels" \
+    printk_log_levels.ko
+Line 40 of "printk_log_levels.c" starts at address 0x3a8 <printk_log_levels_init> ...
+Line 17 of "printk_log_levels.c" starts at address 0x3cc <printk_log_levels_init+36> ...
+```
+
+`printk_emit_all_levels` isn't a real breakpoint target — its address
+lands at `printk_log_levels_init+36`, meaning GCC inlined this small,
+single-call-site `static void` function entirely into its caller. Break
+on `printk_log_levels_init` instead; `next` walks straight through the
+inlined body's lines exactly as if it were a normal function, no
+separate breakpoint required. (This also fixes an ordering problem an
+earlier version of this section had: breaking on a not-yet-loaded
+module's function *before* `insmod` doesn't work regardless of inlining
+— the symbol simply doesn't exist yet. Every other lab in this repo
+bootstraps via `do_init_module` first for exactly this reason.)
+
 ```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break printk_emit_all_levels
+(gdb) break do_init_module
 (gdb) continue
 ```
 ```bash
 sudo insmod ./printk_log_levels.ko
 ```
 ```gdb
-(gdb) next                  # step across each pr_emerg()/pr_alert()/.../pr_debug() call in turn
-(gdb) lx-dmesg               # see each line land in the ring buffer, live, one at a time
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break printk_log_levels_init
+(gdb) continue
+(gdb) next                  # the first pr_info() - "module loaded..."
+(gdb) lx-dmesg                # see it land in the ring buffer immediately
+(gdb) next                     # into the inlined printk_emit_all_levels() body -
+(gdb) next                      # next walks straight through each pr_emerg()/pr_alert()/... in turn
+(gdb) lx-dmesg                   # re-run after every next - watch the ring buffer grow one line at a time
 ```
 
 Stepping one `pr_*()` call at a time and re-running `lx-dmesg` after each
 `next` is the clearest possible way to see that every priority reaches
 the ring buffer unconditionally — the console-loglevel filtering this
 lab's README discusses only ever affects the *live console*, never what
-`lx-dmesg`/`dmesg` can retrieve afterward.
+`lx-dmesg`/`dmesg` can retrieve afterward. Keep `next`-ing past the
+`pr_debug()` line specifically and watch whether a corresponding
+`lx-dmesg` line actually appears — this lab's README already explains
+`pr_debug()`'s output can depend on `CONFIG_DYNAMIC_DEBUG`; stepping
+through it live is how you'd actually confirm which way it goes on your
+kernel, rather than reading dmesg after the fact and inferring it.
 
