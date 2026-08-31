@@ -166,3 +166,43 @@ versus trying the same `step` on `might_sleep()` in the timer path
 `CONFIG_DEBUG_ATOMIC_SLEEP`, confirming the "harmless no-op" claim from
 this lab's README empirically instead of by assertion).
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+
+```bash
+sudo bpftrace -l 'kprobe:timers_workqueues:*'
+```
+```
+kprobe:timers_workqueues:format_ctx.constprop.0
+kprobe:timers_workqueues:heartbeat_timer_fn
+kprobe:timers_workqueues:heartbeat_work_fn
+kprobe:timers_workqueues:stats_show
+```
+
+```bash
+sudo bpftrace -e '
+kprobe:timers_workqueues:heartbeat_timer_fn { printf("TIMER  by %s[%d]\n", comm, pid); }
+kprobe:timers_workqueues:heartbeat_work_fn  { printf("WORKQ  by %s[%d]\n", comm, pid); }
+' &
+sleep 4
+```
+
+Real captured output over ~4 seconds:
+
+```
+TIMER  by cc1[178988]
+WORKQ  by kworker/2:1[41698]
+TIMER  by llvmpipe-0[3814]
+WORKQ  by kworker/2:1[41698]
+TIMER  by llvmpipe-1[3814]
+WORKQ  by kworker/2:1[41698]
+TIMER  by cc1[179041]
+WORKQ  by kworker/2:1[41698]
+```
+
+The whole point of this lab, visible directly: `TIMER` is a different
+task almost every single time; `WORKQ` is the *exact same*
+`kworker/2:1` every single time. One is "whatever happened to be
+running," the other is a real, consistent, schedulable thread.
+

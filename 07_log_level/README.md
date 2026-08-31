@@ -155,3 +155,30 @@ the ring buffer unconditionally — the console-loglevel filtering this
 lab's README discusses only ever affects the *live console*, never what
 `lx-dmesg`/`dmesg` can retrieve afterward.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+`printk_log_levels_init` only runs at load time, so catch it the same
+way as labs 01/02 — probe `do_init_module`, armed before `insmod`:
+
+```bash
+sudo bpftrace -e 'kprobe:do_init_module { printf("do_init_module entered by %s[%d]\n", comm, pid); }' &
+sleep 1.5
+sudo insmod ./printk_log_levels.ko
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+do_init_module entered by insmod[158079]
+```
+
+A single kprobe only tells you the function was *entered*, not how many
+times something inside it ran — for counting the individual `pr_*()`
+calls (and empirically confirming `pr_debug()`'s output really is
+config-dependent, exactly as this lab's own text claims), use the
+`function_graph` walkthrough in `../FTRACE_TRACING.md`, which shows the
+full call tree and lands on **10** `_printk()` calls where the source
+suggests 11.
+

@@ -163,7 +163,7 @@ Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
 
 ```gdb
 (gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break do_allocate
+(gdb) break allocate_store
 (gdb) continue
 ```
 ```bash
@@ -176,13 +176,51 @@ echo "kmalloc 100" | sudo tee /sys/kernel/kernel_memory/allocate
 (gdb) print cur_actual_size   # already computed via ksize() by C code, not GDB
 ```
 
-Note that last one: standard KGDB targets generally don't support
-calling arbitrary kernel functions from the prompt (`print ksize(ptr)`
-directly would be unreliable at best), which is exactly why this
-driver's own `cur_actual_size = ksize(ptr)` line matters — you're
-reading a value the *kernel* computed, not asking GDB to compute it.
-Rerun with `vmalloc` instead of `kmalloc` at the same breakpoint and
-compare `finish`'s reported time-to-return between the two — a rougher
-but real-time echo of the `last_alloc_ns` this lab's sysfs `info`
-attribute already reports.
+`break do_allocate` — the name you'd guess from the source — fails to
+resolve here: `do_allocate()` is `static` and small enough that GCC
+inlines it entirely into `allocate_store()`, leaving no symbol of its
+own (confirmed independently by ftrace below, and empirically by
+`gdb -batch -ex "info line do_allocate"` reporting an address *inside*
+`allocate_store`). Break on the caller instead.
+
+Standard KGDB targets also generally don't support calling arbitrary
+kernel functions from the prompt (`print ksize(ptr)` directly would be
+unreliable at best), which is exactly why this driver's own
+`cur_actual_size = ksize(ptr)` line matters — you're reading a value the
+*kernel* computed, not asking GDB to compute it. Rerun with `vmalloc`
+instead of `kmalloc` at the same breakpoint and compare `finish`'s
+reported time-to-return between the two — a rougher but real-time echo
+of the `last_alloc_ns` this lab's sysfs `info` attribute already reports.
+
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+
+```bash
+sudo bpftrace -l 'kprobe:kernel_memory:*'
+```
+```
+kprobe:kernel_memory:allocate_store
+kprobe:kernel_memory:do_free
+kprobe:kernel_memory:free_store
+kprobe:kernel_memory:info_show
+kprobe:kernel_memory:stats_show
+```
+
+No `do_allocate` in the list — the same inlining GDB runs into, found
+here by its simple absence from what's actually probeable, before ever
+trying to attach anything.
+
+```bash
+sudo bpftrace -e 'kprobe:kernel_memory:allocate_store { printf("allocate_store hit by %s[%d]\n", comm, pid); }' &
+sleep 1.5
+echo "kmalloc 128" | sudo tee /sys/kernel/kernel_memory/allocate
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+allocate_store hit by tee[177871]
+```
 

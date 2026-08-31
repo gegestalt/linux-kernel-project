@@ -97,3 +97,31 @@ symbol names GDB resolves — no macro indirection to see through, which
 makes this the simplest possible first GDB session before trying a lab
 with real state to inspect.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+`init_module` doesn't exist as a kernel symbol until this module is
+actually loading, so you can't probe it directly ahead of time — probe
+the always-present `do_init_module` instead, armed *before* `insmod`:
+
+```bash
+sudo bpftrace -e 'kprobe:do_init_module { printf("do_init_module entered by %s[%d]\n", comm, pid); }' &
+sleep 1.5
+sudo insmod ./hello.ko
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+do_init_module entered by insmod[150599]
+```
+
+That confirms the generic module-load path really did run for this
+`insmod`. To see *your* code specifically execute inside it, the raw
+`function_graph` tracer (which — unlike a kprobe — can show a whole call
+subtree, not just one entry point) is the right tool; see
+`../FTRACE_TRACING.md`'s "what's underneath" section for that version,
+with a real capture showing `init_module [hello]()` at 7.5μs nested
+inside `do_init_module()`'s ~51μs of udev notification and bookkeeping.
+

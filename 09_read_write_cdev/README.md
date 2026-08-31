@@ -163,3 +163,41 @@ this lab's "Load and test" section) and `print to_copy` vs `print
 count` at the point `to_copy` gets clamped by `space` — the exact moment
 this driver decides to return less than what was asked for.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+This is a good one for **argument access**, not just "was it called" —
+`rw_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)`
+puts `count` at `arg2` (zero-indexed):
+
+```bash
+sudo bpftrace -l 'kprobe:read_write_cdev:*'
+```
+```
+kprobe:read_write_cdev:rw_llseek
+kprobe:read_write_cdev:rw_open
+kprobe:read_write_cdev:rw_read
+kprobe:read_write_cdev:rw_release
+kprobe:read_write_cdev:rw_write
+```
+
+```bash
+sudo bpftrace -e 'kprobe:rw_write { printf("count=%d by %s\n", arg2, comm); }' &
+sleep 1.5
+echo -n "hello" | sudo tee /dev/read_write_cdev0
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+count=5 by tee[138566]
+```
+
+Confirmed from inside the actual kernel call, not inferred from the
+shell command: `"hello"` really is 5 bytes. Get the argument index wrong
+(e.g. `arg1`, which is the `buf` *pointer*, printed as if it were a
+number) and you get garbage like `count=-18953992` — a real mistake made
+while building this, worth reproducing once so the failure mode is
+recognizable later.
+

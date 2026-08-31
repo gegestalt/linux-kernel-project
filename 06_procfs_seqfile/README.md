@@ -156,3 +156,40 @@ and you can watch `stop` still fire to match it). `print *pos` in
 `events_seq_next` is the clearest way to see the iterator's position
 counter advancing one record at a time.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+
+```bash
+sudo bpftrace -l 'kprobe:procfs_seqfile:*'
+```
+```
+kprobe:procfs_seqfile:events_open
+kprobe:procfs_seqfile:events_seq_next
+kprobe:procfs_seqfile:events_seq_show
+kprobe:procfs_seqfile:events_seq_start
+kprobe:procfs_seqfile:events_seq_stop
+kprobe:procfs_seqfile:events_write
+kprobe:procfs_seqfile:info_show
+```
+
+All four seq_file iterator callbacks are individually probeable — the
+split into small pieces (rather than one big read function) is visible
+directly in the discovery list, before you even attach anything.
+
+```bash
+sudo bpftrace -e 'kprobe:procfs_seqfile:events_seq_show { printf("show hit by %s[%d]\n", comm, pid); }' &
+sleep 1.5
+cat /proc/procfs_demo/events
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+show hit by cat[157000]
+```
+
+Probe all four (`events_seq_start`/`_next`/`_show`/`_stop`) at once to
+watch the exact call order this lab's GDB section documents, live.
+
