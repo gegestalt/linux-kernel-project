@@ -88,29 +88,3 @@ name this time. `info symbol my_init` after the break confirms which
 section (`.init.text`) it's sitting in, matching this lab's own
 `objdump -h` exercise above.
 
-## Tracing this live
-
-Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
-Same situation as lab 01 — `my_init` doesn't exist as a symbol until this
-module loads, so probe the always-present `do_init_module`, armed first:
-
-```bash
-sudo bpftrace -e 'kprobe:do_init_module { printf("do_init_module entered by %s[%d]\n", comm, pid); }' &
-sleep 1.5
-sudo insmod ./better_hello.ko
-```
-
-Real captured output:
-
-```
-Attached 1 probe
-do_init_module entered by insmod[154826]
-```
-
-Note what you *can't* probe directly here that lab 01's module let you:
-try `sudo bpftrace -l 'kprobe:init_module'` after loading `better_hello.ko`
-— nothing, because this module never defines a function by that name.
-`module_init(my_init)` registers `my_init` through a function pointer
-in the `.initcall` mechanism instead — confirmed the same way lab 01's
-GDB section confirms it, from a different tool entirely.
-

@@ -192,35 +192,3 @@ instead of `kmalloc` at the same breakpoint and compare `finish`'s
 reported time-to-return between the two — a rougher but real-time echo
 of the `last_alloc_ns` this lab's sysfs `info` attribute already reports.
 
-## Tracing this live
-
-Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
-
-```bash
-sudo bpftrace -l 'kprobe:kernel_memory:*'
-```
-```
-kprobe:kernel_memory:allocate_store
-kprobe:kernel_memory:do_free
-kprobe:kernel_memory:free_store
-kprobe:kernel_memory:info_show
-kprobe:kernel_memory:stats_show
-```
-
-No `do_allocate` in the list — the same inlining GDB runs into, found
-here by its simple absence from what's actually probeable, before ever
-trying to attach anything.
-
-```bash
-sudo bpftrace -e 'kprobe:kernel_memory:allocate_store { printf("allocate_store hit by %s[%d]\n", comm, pid); }' &
-sleep 1.5
-echo "kmalloc 128" | sudo tee /sys/kernel/kernel_memory/allocate
-```
-
-Real captured output:
-
-```
-Attached 1 probe
-allocate_store hit by tee[177871]
-```
-

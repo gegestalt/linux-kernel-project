@@ -144,35 +144,3 @@ the variable, which is exactly what this lab's README explains in prose
 and what you're now confirming by watching the raw memory change under
 GDB.
 
-## Tracing this live
-
-Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
-Discover what's here first:
-
-```bash
-sudo bpftrace -l 'kprobe:module_params:*'
-```
-```
-kprobe:module_params:module_params_read
-```
-Just the one — everything else in this module only runs at `init`/`exit`
-or is a `module_param()`-generated accessor with no function of its own
-to probe.
-
-```bash
-sudo bpftrace -e 'kprobe:module_params:module_params_read { printf("read hit by %s[%d]\n", comm, pid); }' &
-sleep 1.5
-cat /dev/module_params_demo
-```
-
-Real captured output:
-
-```
-Attached 1 probe
-read hit by cat[151994]
-read hit by cat[151994]
-```
-
-Two hits, matching `cat`'s usual pattern: one real `read()` that returns
-data, one that returns `0` (EOF) immediately after.
-
