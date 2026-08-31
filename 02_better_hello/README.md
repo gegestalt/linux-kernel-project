@@ -65,7 +65,16 @@ make clean
 
 ## Debugging with GDB
 
-Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Both targets
+confirmed to resolve before being written down:
+
+```bash
+$ gdb -q -batch -nx -ex "file better_hello.ko" -ex "info line my_init" -ex "info line my_exit" better_hello.ko
+Line 9 of "better_hello.c" starts at address 0x38 <my_init> and ends at 0x40 <my_init+8>.
+Line 21 of "better_hello.c" starts at address 0x78 <my_exit> and ends at 0x80 <my_exit+8>.
+```
+
+**The load path.**
 
 ```gdb
 (gdb) break do_init_module
@@ -87,4 +96,31 @@ exporting a fixed name, so you have to break on the *actual* function
 name this time. `info symbol my_init` after the break confirms which
 section (`.init.text`) it's sitting in, matching this lab's own
 `objdump -h` exercise above.
+
+**The unload path.** Same story as lab 01's `cleanup_module`, but with a
+twist worth checking for yourself: `my_exit` is marked `__exit`, which
+this lab's README explains gets discarded entirely for code built
+statically into `vmlinux` — but for a *loadable* module like this one,
+the function is very much still there and callable:
+
+```gdb
+(gdb) break my_exit
+(gdb) continue
+```
+```bash
+sudo rmmod better_hello
+```
+```gdb
+(gdb) next
+(gdb) finish
+```
+
+If you're curious exactly how `__exit`/`__init` are implemented rather
+than taking the README's word for it: `info address my_exit` here vs.
+`info address my_init` from the load path — both report addresses, both
+inside this module's mapped text, because `.ko` files don't discard
+either section the way a built-in `vmlinux` would. Cross-reference
+against `objdump -h better_hello.ko` from this lab's own "Things to try"
+to see which named section (`.init.text` vs `.exit.text`) each address
+actually falls in.
 

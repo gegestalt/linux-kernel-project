@@ -118,10 +118,55 @@ make clean
 
 ## Debugging with GDB
 
-Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Every target below
+confirmed against real debug info first:
 
+```bash
+$ gdb -q -batch -nx -ex "file module_params.ko" \
+    -ex "info line module_params_init" -ex "info line module_params_exit" \
+    -ex "info line module_params_read" -ex "ptype primes" -ex "ptype greeting" \
+    module_params.ko
+Line 147 of "module_params.c" starts at address 0x888 <module_params_init> and ends at 0x8ac <module_params_init+36>.
+Line 177 of "module_params.c" starts at address 0x838 <module_params_exit> and ends at 0x840 <module_params_exit+8>.
+Line 96 of "module_params.c" starts at address 0x88 <module_params_read> and ends at 0xac <module_params_read+36>.
+type = int [4]
+type = char *
+```
+
+**`module_params_init` — watch every parameter's *actual* load-time
+value, and the primes-formatting loop build its string one write at a
+time.** This is the richest stop in this lab: five real parameters to
+inspect at once, right where the module first reports them.
+
+```bash
+sudo insmod ./module_params.ko primes=11,13,17,19 log_level=7 greeting="custom greeting"
+```
 ```gdb
 (gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break module_params_init
+(gdb) continue
+(gdb) print greeting           # "custom greeting" - the charp parameter, already parsed
+(gdb) print repeat_count
+(gdb) print dbg_level           # 7 - note the C name differs from the sysfs name (log_level)
+(gdb) print primes               # int [4] = {11, 13, 17, 19} - the whole array at once
+(gdb) print primes_count
+(gdb) next                        # step into the primes_buf formatting loop
+(gdb) print primes_len
+(gdb) next
+(gdb) print primes_buf             # watch the comma-separated string grow, one scnprintf() at a time
+(gdb) finish                        # run to return, back out to do_one_initcall
+```
+
+Every one of those values is exactly what you passed on the `insmod`
+command line, already resolved into the module's own global variables
+by the time `module_params_init` runs — direct confirmation that
+`module_param()` parsing happens *before* your `init` function is ever
+called, not something your code does itself.
+
+**`module_params_read` — the live-tunable read path**, unchanged from
+before:
+
+```gdb
 (gdb) break module_params_read
 (gdb) continue
 ```
@@ -143,4 +188,21 @@ no `module_params_repeat_count_store()` function to break on, because
 the variable, which is exactly what this lab's README explains in prose
 and what you're now confirming by watching the raw memory change under
 GDB.
+
+**`module_params_exit`** — trivial, but worth the one-line confirmation
+that `misc_deregister()` runs before the final `pr_info()`, the same
+"clean up the userspace-facing interface first" ordering every
+device-backed lab in this repo follows:
+
+```gdb
+(gdb) break module_params_exit
+(gdb) continue
+```
+```bash
+sudo rmmod module_params
+```
+```gdb
+(gdb) next
+(gdb) finish
+```
 
