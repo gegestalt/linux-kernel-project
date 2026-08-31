@@ -103,6 +103,18 @@ driver that needs to push unsolicited events to multiple listeners.
 
 ## Debugging and observability beyond dmesg/sysfs
 
+- **GDB/KGDB** — this repo already has full source-level debugging set
+  up (`../GDB_DEBUGGING.md`, plus a "Debugging with GDB" section in
+  every lab 01–16): breakpoints, `next`/`step` line by line, live struct
+  inspection, `watch`points. Extending it to whatever you build from
+  this roadmap works exactly the same way — build the new module against
+  the same debug kernel, `lx-symbols`, break on its own functions. The
+  one thing that changes: an **interrupt handler** (see "Interrupts"
+  below) is under tighter constraints than any callback in labs 01–16 —
+  stopping one at a breakpoint for too long risks tripping a hardware or
+  softlockup watchdog on the target VM, in a way a timer or workqueue
+  breakpoint never did. Keep IRQ-handler breakpoint sessions short, and
+  expect `continue` to be more urgent than exploratory there.
 - **ftrace** (`/sys/kernel/debug/tracing/`) — function-level tracing of
   the *running* kernel, including this repo's own modules, with no
   instrumentation code needed. Try: `echo function >
