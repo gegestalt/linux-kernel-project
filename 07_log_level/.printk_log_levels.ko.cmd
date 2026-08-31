@@ -1,1 +1,0 @@
-savedcmd_printk_log_levels.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-7.0.0-30-generic/scripts/module.lds -o printk_log_levels.ko printk_log_levels.o printk_log_levels.mod.o .module-common.o
