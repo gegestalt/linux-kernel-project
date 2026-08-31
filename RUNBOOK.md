@@ -11,6 +11,13 @@ Run all of this inside a disposable VM, not bare metal — see the
 top-level [`README.md`](README.md#a-word-on-safety) for why, and lab 14's
 entry below in particular is only safe there.
 
+This document is the `dmesg`-and-shell-commands pass — build it, load it,
+watch what it prints. For stepping through any lab's own code line by
+line with a real debugger instead, see [`GDB_DEBUGGING.md`](GDB_DEBUGGING.md)
+— its own per-lab quick-reference table (§7) is the GDB equivalent of the
+walkthrough below, and every lab's `README.md` has a full "Debugging with
+GDB" section.
+
 ## Before you start
 
 ```bash
