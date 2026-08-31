@@ -98,6 +98,18 @@ Each lab's own `README.md` has the exact commands for that lab — device
 names, module parameters, sysfs paths, and what output to expect — so you
 don't have to reconstruct them from the source every time.
 
+## Where this leads
+
+[`LEARNING_PATH.md`](LEARNING_PATH.md) maps labs 01–16 onto skill level
+(beginner/intermediate/advanced) and points at real, freely-available
+material to study once a level's labs stop teaching you anything new —
+LDD3's free LWN hosting, Bootlin's free training slides, kernelnewbies'
+guides. [`DEPLOYMENT.md`](DEPLOYMENT.md) covers the part every lab here
+stops short of: getting a module onto a machine that isn't yours — DKMS,
+module signing, and packaging. `17_next_steps/README.md` is the
+complementary map from *topic* (interrupts, platform drivers, DMA, ...)
+to what's missing from this repo.
+
 ## Contributing to your own repo
 
 The git history here is meant to double as part of the learning record: one
