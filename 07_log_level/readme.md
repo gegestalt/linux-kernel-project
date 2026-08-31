@@ -32,7 +32,7 @@ kernel's internal ring buffer.
 | File | Purpose |
 |---|---|
 | `printk_log_levels.c` | The module. |
-| `Makefile` | Build, `clean`, and `check`/`checkpatch` targets (mirrors lab 05, with `--ignore=PREFER_PR_LEVEL` since this lab's whole point is comparing raw `printk(KERN_DEBUG ...)` against `pr_debug()`). |
+| `Makefile` | Build, `clean`, and `check`/`checkpatch` targets (mirrors module 05, with `--ignore=PREFER_PR_LEVEL` since this module's whole point is comparing raw `printk(KERN_DEBUG ...)` against `pr_debug()`). |
 
 ## Build
 
@@ -131,11 +131,11 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This lab's own
+Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This module's own
 premise — "`dmesg -w` isn't the whole picture" — is exactly what
 `lx-dmesg` fixes: it reads the ring buffer straight out of kernel
 memory, so it works even with the guest frozen mid-breakpoint.
@@ -158,7 +158,7 @@ inlined body's lines exactly as if it were a normal function, no
 separate breakpoint required. (This also fixes an ordering problem an
 earlier version of this section had: breaking on a not-yet-loaded
 module's function *before* `insmod` doesn't work regardless of inlining
-— the symbol simply doesn't exist yet. Every other lab in this repo
+— the symbol simply doesn't exist yet. Every other module in this repo
 bootstraps via `do_init_module` first for exactly this reason.)
 
 ```gdb
@@ -182,10 +182,10 @@ sudo insmod ./printk_log_levels.ko
 Stepping one `pr_*()` call at a time and re-running `lx-dmesg` after each
 `next` is the clearest possible way to see that every priority reaches
 the ring buffer unconditionally — the console-loglevel filtering this
-lab's README discusses only ever affects the *live console*, never what
-`lx-dmesg`/`dmesg` can retrieve afterward. Keep `next`-ing past the
+module's README discusses only ever affects the *live console*, never
+what `lx-dmesg`/`dmesg` can retrieve afterward. Keep `next`-ing past the
 `pr_debug()` line specifically and watch whether a corresponding
-`lx-dmesg` line actually appears — this lab's README already explains
+`lx-dmesg` line actually appears — this module's README already explains
 `pr_debug()`'s output can depend on `CONFIG_DYNAMIC_DEBUG`; stepping
 through it live is how you'd actually confirm which way it goes on your
 kernel, rather than reading dmesg after the fact and inferring it.

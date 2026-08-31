@@ -2,10 +2,10 @@
 
 `printk_log_levels.c` emits one message at every standard `printk`
 priority (`KERN_EMERG` through `KERN_DEBUG`). There's no branching
-logic and no shared state to inspect — this lab's actual subject is
+logic and no shared state to inspect — this module's actual subject is
 `dmesg`'s own filtering behavior, which lives in the *console* and
 *ring buffer* layers, not in this driver's code. GDB's role here is
-narrower and more precise than in other labs: proving, byte for byte,
+narrower and more precise than in other modules: proving, byte for byte,
 what priority value each `pr_*()` helper actually attaches to its
 message, and showing that `pr_debug()`'s appearance depends on kernel
 configuration and dynamic-debug state that has nothing to do with this
@@ -55,9 +55,9 @@ Line 17 of "printk_log_levels.c" starts at address 0x3cc <printk_log_levels_init
 
 **There is no standalone `printk_emit_all_levels` symbol** — GCC
 inlined its entire body directly into `printk_log_levels_init`, the
-same compiler behavior lab 11 hits with `increment_once()` and lab 13
-hits with `do_allocate()`. `break printk_log_levels_init` is therefore
-the only breakpoint this lab needs; `next`-stepping through it walks
+same compiler behavior module 11 hits with `increment_once()` and
+module 13 hits with `do_allocate()`. `break printk_log_levels_init` is
+therefore the only breakpoint this module needs; `next`-stepping through it walks
 straight through what used to be a separate function call with no
 extra frame to descend into.
 

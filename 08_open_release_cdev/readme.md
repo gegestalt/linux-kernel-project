@@ -9,7 +9,7 @@ What actually happens on `open()`/`close()`, and why "one `open()` call" and
   and freed in `release()` — the same struct pointer flows through every
   `read`/`write`/`ioctl` call for that particular open file description
   (this driver doesn't implement those, but the pattern here is exactly
-  what labs [09](../09_read_write_cdev/) and [10](../10_ioctl_basics/) build
+  what modules [09](../09_read_write_cdev/) and [10](../10_ioctl_basics/) build
   on).
 - The distinction between a **file descriptor** and an **open file
   description**: `dup()` creates a second fd referring to the *same* open
@@ -111,11 +111,11 @@ make clean         # also removes the cdev_test binary
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This lab's whole
+Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This module's whole
 point is the `dup()`/reference-counting behavior, which is exactly the
 kind of thing worth pausing mid-execution to actually see rather than
 inferring from log lines:
@@ -175,7 +175,7 @@ sudo insmod ./open_release_cdev.ko
 At `open_release_cdev_exit` (break on it directly — it already exists
 once the module is loaded, no catch-all needed), `print active_opens`
 and `print next_open_id` before `unregister_chrdev()` runs — this is
-the exact pair of numbers this lab's own `dmesg` exit log reports
+the exact pair of numbers this module's own `dmesg` exit log reports
 (`active_opens=... total_open_calls=...`), now readable straight out of
 the `atomic_t`/`atomic64_t` globals instead of parsing a log line.
 

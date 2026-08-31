@@ -13,8 +13,8 @@ machinery behind real files like `/proc/PID/maps` or `/proc/interrupts`.
 - `struct proc_ops` (the modern replacement for wiring `struct
   file_operations` directly into `/proc` since Linux 5.6) — note it's a
   *different* struct with differently-named fields (`proc_open`,
-  `proc_read`, ...) from the `file_operations` every other lab in this repo
-  uses for `/dev` nodes.
+  `proc_read`, ...) from the `file_operations` every other module in this
+  repo uses for `/dev` nodes.
 - **`proc_create_single()`** for the simple case: `info_show()` is a bare
   seq_file `show()` callback with no start/next/stop machinery — the
   kernel handles the "there's exactly one record" iteration for you.
@@ -27,7 +27,7 @@ machinery behind real files like `/proc/PID/maps` or `/proc/interrupts`.
   inside `show()`.
 - A `/proc` file that's both readable *and* writable
   (`echo clear > .../events`), via `proc_ops.proc_write`, using the same
-  `copy_from_user()` pattern as the character devices in labs 05/09.
+  `copy_from_user()` pattern as the character devices in modules 05/09.
 - Self-logging: opening `/proc/procfs_demo/events` is itself recorded as an
   event, so the act of reading the log grows it — a deliberately visible
   side effect to make the iterator's data change under you between reads.
@@ -127,15 +127,15 @@ make clean
   `../../linux_mainline` and find `seq_read()`/`seq_lseek()` — the generic
   functions this module borrows directly instead of writing its own
   `read`/`llseek`. This is the same "supply data, borrow generic glue"
-  shape as `simple_read_from_buffer()` in lab 03.
+  shape as `simple_read_from_buffer()` in module 03.
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This lab is the
+Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This module is the
 best one in the repo for actually *watching* the seq_file iterator
 contract run, rather than just reading about the order it's called in:
 
@@ -235,5 +235,5 @@ echo clear | sudo tee /proc/procfs_demo/events
 Send anything other than `clear` and re-break here — `print kbuf` shows
 your actual text, and stepping past the `sysfs_streq()` check lands on
 `return -EINVAL;` instead of the reset, matching the "invalid writes are
-rejected" behavior from this lab's own "Load and test" section.
+rejected" behavior from this module's own "Load and test" section.
 

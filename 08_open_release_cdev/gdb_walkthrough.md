@@ -4,8 +4,8 @@
 each `open()` allocates a small `struct open_context` with `kzalloc()`,
 stamps it with an ID/timestamp/opener PID, and stores the pointer in
 `filp->private_data`; `release()` recovers that exact same pointer from
-that exact same field and frees it. This lab's whole point is a
-question earlier labs never had to answer: **how does `release()` know
+that exact same field and frees it. This module's whole point is a
+question earlier modules never had to answer: **how does `release()` know
 anything about the specific `open()` call it's closing out?** The
 answer is entirely mechanical, and GDB can show you the same pointer
 value on both sides of that round-trip.
