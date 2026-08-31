@@ -179,9 +179,8 @@ echo "kmalloc 100" | sudo tee /sys/kernel/kernel_memory/allocate
 `break do_allocate` — the name you'd guess from the source — fails to
 resolve here: `do_allocate()` is `static` and small enough that GCC
 inlines it entirely into `allocate_store()`, leaving no symbol of its
-own (confirmed independently by ftrace below, and empirically by
-`gdb -batch -ex "info line do_allocate"` reporting an address *inside*
-`allocate_store`). Break on the caller instead.
+own (confirmed by `gdb -batch -ex "info line do_allocate"` reporting an
+address *inside* `allocate_store`). Break on the caller instead.
 
 Standard KGDB targets also generally don't support calling arbitrary
 kernel functions from the prompt (`print ksize(ptr)` directly would be
