@@ -9,9 +9,9 @@ only thing left to actually compare is *where the kernel runs each one*.
 - **`struct timer_list` runs in softirq context** (`run_timer_softirq()`).
   No sleeping, no blocking allocation. `current` inside the callback is
   whatever task happened to be executing when the softirq fired — not a
-  thread "belonging" to the timer. Labs [03](../03_gpio_sim/) and
+  thread "belonging" to the timer. Modules [03](../03_gpio_sim/) and
   [12](../12_wait_queues_blocking/) already used a timer/delayed-work
-  callback each without dwelling on this; this lab makes the context
+  callback each without dwelling on this; this module makes the context
   itself the thing under test.
 - **`struct delayed_work` runs in process context**, on a real kworker
   thread. It can sleep, allocate with `GFP_KERNEL`, take a mutex — none
@@ -30,8 +30,8 @@ only thing left to actually compare is *where the kernel runs each one*.
   `checkpatch --strict` warns on `msleep()` calls under 20ms and the
   kernel provides `usleep_range()` (backed by hrtimers) for short,
   reasonably-precise sleeps instead.
-- **`timer_shutdown_sync()`** (from lab [12](../12_wait_queues_blocking/))
-  next to **`cancel_delayed_work_sync()`** (from lab
+- **`timer_shutdown_sync()`** (from module [12](../12_wait_queues_blocking/))
+  next to **`cancel_delayed_work_sync()`** (from module
   [03](../03_gpio_sim/)) in the same teardown path — the timer and
   workqueue equivalents of "wait for any in-flight callback to finish and
   guarantee it won't reschedule itself," required before it's safe to
@@ -138,7 +138,7 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
@@ -168,7 +168,7 @@ descends into scheduler code — `bt` will show real sleep/wake frames)
 versus trying the same `step` on `might_sleep()` in the timer path
 (nothing to descend into on a kernel without
 `CONFIG_DEBUG_ATOMIC_SLEEP`, confirming the "harmless no-op" claim from
-this lab's README empirically instead of by assertion).
+this module's README empirically instead of by assertion).
 
 **`format_ctx`/init/exit**, verified — `format_ctx` resolves as its own
 symbol here (unlike similarly-small helpers elsewhere in this repo that
@@ -187,7 +187,7 @@ Line 195 ... <timers_workqueues_exit> ...
 callback — `print in_softirq()`, `print in_task()`, `print
 preemptible()` *at the exact same breakpoint*, called from two different
 contexts on two different hits, is the single clearest way to see this
-lab's whole point: identical code, radically different answers depending
+module's whole point: identical code, radically different answers depending
 on who called it. `bt` immediately after hitting `format_ctx` shows
 which of the two callbacks you're inside without needing to check
 anything else.

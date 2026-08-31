@@ -18,8 +18,8 @@ the differences you see are the allocators', not the driver's.
   physical pages into one virtually contiguous range. No DMA guarantee,
   and each allocation costs a page-table/TLB setup that `kmalloc()`
   doesn't pay — but no meaningful size ceiling either. This is the
-  allocator lab [09](../09_read_write_cdev/)'s fixed 4KB buffer *didn't*
-  need, and this lab's `vmalloc` mode is where you can push well past
+  allocator module [09](../09_read_write_cdev/)'s fixed 4KB buffer *didn't*
+  need, and this module's `vmalloc` mode is where you can push well past
   what `kmalloc` will ever hand back.
 - **A dedicated `kmem_cache`** (`kmem_cache_create()` at module load,
   `kmem_cache_alloc()`/`kmem_cache_free()` per use) — a slab cache
@@ -151,7 +151,7 @@ make clean
 - Read `mm/slab_common.c` and `mm/vmalloc.c` in `../../linux_mainline` for
   what `kmalloc()`/`vmalloc()` actually do under the hood — in particular
   find where `vmalloc()` walks page tables to build the virtual mapping,
-  the exact cost this lab's timing numbers are measuring.
+  the exact cost this module's timing numbers are measuring.
 - Add a fourth mode using `kzalloc()`/`vzalloc()` (zeroed variants) and
   compare timing against the non-zeroing versions at a large size — the
   zeroing pass is real work, and vmalloc's zeroing in particular touches
@@ -189,7 +189,7 @@ unreliable at best), which is exactly why this driver's own
 *kernel* computed, not asking GDB to compute it. Rerun with `vmalloc`
 instead of `kmalloc` at the same breakpoint and compare `finish`'s
 reported time-to-return between the two — a rougher but real-time echo
-of the `last_alloc_ns` this lab's sysfs `info` attribute already reports.
+of the `last_alloc_ns` this module's sysfs `info` attribute already reports.
 
 **`do_free`/`free_store`/init/exit** — `do_free` (unlike `do_allocate`)
 is real and resolves as its own symbol, verified alongside the rest:
@@ -225,6 +225,6 @@ echo 1 | sudo tee /sys/kernel/kernel_memory/free
 held** (skip the `echo 1 | ... /free` step first), and step past the
 `if (cur_type != ALLOC_NONE)` check — you'll see it call `do_free()`
 itself before `kmem_cache_destroy()`, the exact defensive cleanup this
-lab's README describes as preventing a real driver from silently
+module's README describes as preventing a real driver from silently
 leaking memory on unload.
 

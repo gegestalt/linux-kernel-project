@@ -4,7 +4,7 @@
 a `struct timer_list` and a `struct delayed_work` — doing the exact
 same job (tick a counter, record the execution context) so the only
 real variable on display is *where* the kernel actually ran each one.
-This lab's walkthrough is built to make that difference undeniable:
+This module's walkthrough is built to make that difference undeniable:
 breaking on both callbacks and reading `in_softirq()`/`in_task()`/
 `preemptible()` directly out of the frozen kernel's own state at each
 stop, rather than trusting the source comment's claim about which
@@ -88,7 +88,7 @@ is softirq context, not merely "running from something timer-related."
 ```
 
 `current` here is genuinely whatever task happened to be executing when
-the softirq fired — confirm it isn't a dedicated thread the way lab
+the softirq fired — confirm it isn't a dedicated thread the way module
 15's kthread is:
 
 ```gdb
@@ -128,7 +128,7 @@ Thread 2 hit Breakpoint N, heartbeat_work_fn (work=0x...) at timers_workqueues.c
 ```
 
 Different bottom frames from step 2 entirely — `process_one_work`/
-`worker_thread`/`kthread`, the same shape lab 03's workqueue callback
+`worker_thread`/`kthread`, the same shape module 03's workqueue callback
 showed. `current` here is a real, dedicated `kworker` task:
 
 ```gdb
@@ -159,7 +159,7 @@ $3 = "in_interrupt=0 in_softirq=0 in_task=1 preemptible=1 comm=kworker/0:1 pid=.
 **Directly contrast this string against step 2's.** `in_task=1`,
 `in_softirq=0`, `preemptible=1` — the complete opposite pattern from
 the timer callback, for what is, source-code-wise, an almost identical
-function. This pair of `format_ctx()` outputs is the entire lab,
+function. This pair of `format_ctx()` outputs is the entire module,
 distilled to two strings you read straight out of memory.
 
 ```gdb
@@ -207,12 +207,12 @@ Thread 2 hit Breakpoint N, timers_workqueues_exit () at timers_workqueues.c:195
 ```
 
 Both of these block until any in-flight callback has actually
-finished, the same guarantee lab 03's `gpioctrl_exit()` and lab 12's
-exit path each depend on — worth noticing this is now the *third* lab
-in this repo whose safe-unload logic hinges on exactly this kind of
+finished, the same guarantee module 03's `gpioctrl_exit()` and module
+12's exit path each depend on — worth noticing this is now the *third*
+module in this repo whose safe-unload logic hinges on exactly this kind of
 wait, because "something might still be running asynchronously" is a
 recurring fact of real driver code, not a one-off concern specific to
-any single lab.
+any single module.
 
 ```bash
 # vmb:

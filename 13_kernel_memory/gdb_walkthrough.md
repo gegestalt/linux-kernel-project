@@ -3,7 +3,7 @@
 `kernel_memory.c` exposes three kernel allocators — `kmalloc()`,
 `vmalloc()`, `kmem_cache_alloc()` — behind one sysfs control slot,
 tracking exactly one live allocation at a time. The debugging angle
-this lab is built for: printing the *same* pointer through each
+this module is built for: printing the *same* pointer through each
 allocator's different lens (`ksize()`'s notion of "actual size" only
 applies to `kmalloc`; `vmalloc`'s pages are virtually, not physically,
 contiguous; a `kmem_cache` object always comes back exactly
@@ -38,7 +38,7 @@ Line 324: kernel_memory_init
 Line 353: kernel_memory_exit
 ```
 
-Like lab 11's `increment_once()`, `do_allocate()` has no standalone
+Like module 11's `increment_once()`, `do_allocate()` has no standalone
 symbol — confirmed statically:
 
 ```
@@ -100,7 +100,7 @@ $3 = (void *) 0xffff...
 This address is a real, mapped kernel address you could in principle
 `x/100xb` right now (it's freshly `kmalloc()`'d, uninitialized —
 don't expect meaningful bytes, just confirm it's readable and doesn't
-fault, unlike lab 10's raw userspace `argp`).
+fault, unlike module 10's raw userspace `argp`).
 
 ```gdb
 (gdb) next    # cur_actual_size = ksize(ptr)  - only for ALLOC_KMALLOC
