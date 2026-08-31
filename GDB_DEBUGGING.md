@@ -19,11 +19,167 @@ stripped`, and `include/config/kernel.release` reports
 **`7.2.0-kgdb-debug+`** — distinct from this machine's actual running
 kernel, so it can never collide with it. `arch/arm64/boot/Image` (the
 bootable kernel image) is built too. Section 2 below is now a record of
-how it was built, not something you need to repeat — skip straight to
-**section 1** (create VM B) and **section 3** (install on VM B) if you're
-picking this up fresh. The only work still outstanding is entirely
-manual, on your end: creating VM B in VMware, installing this kernel on
-it, and wiring the serial connection — sections 1, 3, and 4.
+how it was built, not something you need to repeat.
+
+**Use the QEMU path below — it's simpler, needs no second VM, and is the
+one actually verified working end-to-end this session** (real breakpoint
+hit, real `lx-symbols`, real single-step, real `finish` return value, on
+lab 01). Sections 0/1/3/4 (the two-VM VMware plan) are kept as a
+documented alternative — useful if you specifically want a second,
+independent machine, or QEMU's software emulation (no `/dev/kvm` on this
+VM, so it runs unaccelerated — still fine for debugging, just not fast)
+turns out to be a problem for you — but they're no longer the
+recommended path.
+
+## QEMU path (recommended): the debug kernel, right here, no second VM
+
+QEMU supplies its own gdbstub (`-s`), so the isolation Track 2
+fundamentally needs — something has to freeze at a breakpoint without
+taking down the machine GDB runs on — comes from the QEMU *process*
+being a separate, disposable thing GDB controls from outside, not from a
+second VM. This machine (VM A) never freezes; only the QEMU guest does.
+
+### One-time setup: a busybox initramfs and a scratch disk
+
+```bash
+mkdir -p /home/adiopocere/Desktop/codes/qemu-vmb/initramfs_root/{bin,dev,proc,sys,mnt/labs}
+cd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs_root
+cp /usr/bin/busybox bin/busybox
+for applet in $(./bin/busybox --list); do
+  [ "$applet" = busybox ] && continue   # don't symlink over the real binary with itself
+  ln -sf busybox "bin/$applet"
+done
+```
+
+`/init` (make executable with `chmod +x`):
+
+```bash
+#!/bin/busybox sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || /bin/busybox mdev -s
+mkdir -p /mnt/labs
+mount -t ext4 /dev/vda /mnt/labs
+echo
+echo "=== VM B (QEMU) ready ==="
+echo "lab modules are at /mnt/labs (virtio-blk disk from the host)"
+echo "kernel: $(uname -r)"
+echo
+exec /bin/busybox setsid /bin/busybox cttyhack /bin/busybox sh
+```
+
+Package it, and create a small scratch disk you'll copy each lab's
+built `.ko` onto:
+
+```bash
+cd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs_root
+find . | cpio -o -H newc 2>/dev/null | gzip > ../initramfs.cpio.gz
+
+cd /home/adiopocere/Desktop/codes/qemu-vmb
+qemu-img create -f raw labs-disk.img 64M
+mkfs.ext4 -q -F labs-disk.img
+```
+
+(9p passthrough would avoid the copy-in-a-disk-image step entirely, but
+`CONFIG_NET_9P`/`CONFIG_9P_FS` weren't in the trimmed kernel config — not
+worth a rebuild for. `CONFIG_VIRTIO_BLK`/`CONFIG_EXT4_FS` were already
+built in, so a disk image was the zero-rebuild option.)
+
+### Per-lab: build against the debug kernel, not the host's
+
+Every lab's Makefile hardcodes `/lib/modules/$(uname -r)/build` — that
+builds against *this machine's* running kernel, producing a `.ko` whose
+`vermagic` won't match the debug kernel and that the guest will refuse
+to load. Invoke kbuild directly instead, pointing at the debug tree:
+
+```bash
+cd NN_lab_name
+make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
+modinfo *.ko | grep vermagic   # should read 7.2.0-kgdb-debug+, not this host's kernel
+```
+
+Copy the result onto the scratch disk:
+
+```bash
+sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
+sudo mkdir -p /tmp/vmb-mnt/NN_lab_name
+sudo cp *.ko /tmp/vmb-mnt/NN_lab_name/
+sudo umount /tmp/vmb-mnt
+```
+
+### Boot the guest (one tmux pane) and attach GDB (another)
+
+```bash
+tmux new-session -d -s vmb -x 220 -y 50
+tmux send-keys -t vmb "qemu-system-aarch64 \
+  -M virt -cpu max -m 1024 -smp 2 \
+  -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
+  -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
+  -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
+  -append 'console=ttyAMA0 rdinit=/init nokaslr' \
+  -nographic -s" Enter
+```
+
+**`nokaslr` is not optional.** `CONFIG_RANDOMIZE_BASE=y` is set, and
+without disabling it at boot, every address GDB reads out of the static
+`vmlinux` symbol table is offset from where the kernel actually runs —
+breakpoints get silently planted at the wrong address and simply never
+fire (this happened on the very first attempt this session: `insmod`
+ran straight through with no stop, no error, nothing — the quietest
+possible failure mode). No kernel rebuild needed, it's a boot parameter.
+
+```bash
+tmux new-session -d -s gdbsess -x 220 -y 50
+tmux send-keys -t gdbsess "cd /home/adiopocere/Desktop/codes/linux_mainline && gdb -q -iex 'set auto-load safe-path /' vmlinux" Enter
+```
+
+**The `-iex 'set auto-load safe-path /'` matters too** — plain `set
+auto-load safe-path /` typed *after* `gdb vmlinux` has already started is
+too late: GDB tries to auto-load `scripts/gdb/vmlinux-gdb.py` (which is
+what makes `lx-symbols`/`lx-dmesg`/etc. exist at all) while starting up,
+*before* your first typed command runs, declines it as unsafe, and
+manually `source`-ing the script afterward as a workaround breaks its
+own internal `import linux` (the script expects the auto-loader's own
+path setup, not a bare manual `source`). `-iex` runs before the file
+loads, so auto-load succeeds normally.
+
+```gdb
+(gdb) target remote :1234
+(gdb) break do_init_module
+(gdb) continue
+```
+```bash
+# in the vmb pane:
+tmux send-keys -t vmb "insmod /mnt/labs/NN_lab_name/your_module.ko" Enter
+```
+```gdb
+# back in gdbsess - real output from this session, lab 01:
+Thread 2 hit Breakpoint 1, do_init_module (mod=mod@entry=0xffff80007c322040) at kernel/module/main.c:3089
+3089	{
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+loading @0xffff80007c320000: /home/adiopocere/Desktop/codes/linux-kernel-project/01_hello_init/hello.ko
+(gdb) break init_module
+Breakpoint 2 at 0xffff80007c320010: file hello.c, line 10.
+(gdb) continue
+Thread 2 hit Breakpoint 2, init_module () at hello.c:10
+10	    printk(KERN_INFO "Hello luv .\n");
+(gdb) next
+16	    return 0;
+(gdb) finish
+Value returned is $1 = 0
+```
+
+From here it's the same general pattern as any KGDB session — see
+section 6 below. To end a session: `delete` breakpoints in `gdbsess`,
+then `tmux send-keys -t vmb "poweroff -f" Enter` and `tmux kill-session`
+both panes. Rebooting the guest fresh for a new lab is cheap (a few
+seconds) — no need to keep one guest running across unrelated labs.
+
+## Alternative path: two VMware VMs instead of QEMU
+
+Everything from here through section 4 is the two-VM plan — kept as a
+documented fallback (see "Status" above for why QEMU is recommended
+instead). Skip to section 5 if you're using the QEMU path.
 
 ## 0. The topology: two VMs, not one
 
