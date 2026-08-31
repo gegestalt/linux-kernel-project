@@ -175,6 +175,10 @@ make clean
 
 ## Debugging with GDB
 
+For a full, self-contained, step-by-step session for this lab — tmux
+pane layout, every command, every output explained — see
+[`GDB_WALKTHROUGH.md`](GDB_WALKTHROUGH.md).
+
 Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This is the lab
 where stepping through GDB pays off most — you can watch the button read
 turn into the LED write, one line at a time, including stepping *into*

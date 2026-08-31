@@ -131,6 +131,10 @@ make clean
 
 ## Debugging with GDB
 
+For a full, self-contained, step-by-step session for this lab — tmux
+pane layout, every command, every output explained — see
+[`GDB_WALKTHROUGH.md`](GDB_WALKTHROUGH.md).
+
 Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab is the
 best one in the repo for actually *watching* the seq_file iterator
 contract run, rather than just reading about the order it's called in:

@@ -111,6 +111,10 @@ make clean         # also removes the cdev_test binary
 
 ## Debugging with GDB
 
+For a full, self-contained, step-by-step session for this lab — tmux
+pane layout, every command, every output explained — see
+[`GDB_WALKTHROUGH.md`](GDB_WALKTHROUGH.md).
+
 Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab's whole
 point is the `dup()`/reference-counting behavior, which is exactly the
 kind of thing worth pausing mid-execution to actually see rather than
