@@ -205,8 +205,6 @@ It covers environment setup (git identity matching your email exactly,
 make, formatting, `get_maintainer.pl`, sending inline, and handling
 feedback — the same pipeline outlined above, in more depth, kept current
 by the community that actually reviews these patches. See
-[`LEARNING_PATH.md`](LEARNING_PATH.md) for where this fits relative to
-this repo's own labs, and
 [`kernelnewbies.org/FAQ/WhereDoIBegin`](https://kernelnewbies.org/FAQ/WhereDoIBegin)
 for more general advice on picking a first real target.
 

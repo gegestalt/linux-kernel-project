@@ -47,7 +47,6 @@ NN_name/
 | [14](14_timers_workqueues/) | `timers_workqueues` | `struct timer_list` (atomic/softirq context) side by side with `struct work_struct` (process context), and why the distinction matters for what each callback is allowed to do. |
 | [15](15_kthreads/) | `kthreads` | A dedicated kernel thread (`kthread_run()`) producing data that a reader consumes through the character device, plus clean shutdown with `kthread_stop()`. |
 | [16](16_debugfs_sysfs/) | `debugfs_sysfs` | `debugfs_create_*()` next to the sysfs attributes from lab 03/09, contrasting the two: stability guarantees, discoverability, and when to use which. |
-| [17](17_next_steps/) | `next_steps` | No new module — a map of where to go once these labs stop being new: interrupts, platform drivers & devicetree overlays, DMA, block drivers, tracing, and how to move this whole workflow into a real or QEMU-emulated board instead of `gpio-sim`. |
 
 ## Environment
 
@@ -100,15 +99,9 @@ don't have to reconstruct them from the source every time.
 
 ## Where this leads
 
-[`LEARNING_PATH.md`](LEARNING_PATH.md) maps labs 01–16 onto skill level
-(beginner/intermediate/advanced) and points at real, freely-available
-material to study once a level's labs stop teaching you anything new —
-LDD3's free LWN hosting, Bootlin's free training slides, kernelnewbies'
-guides. [`DEPLOYMENT.md`](DEPLOYMENT.md) covers the part every lab here
-stops short of: getting a module onto a machine that isn't yours — DKMS,
-module signing, and packaging. `17_next_steps/README.md` is the
-complementary map from *topic* (interrupts, platform drivers, DMA, ...)
-to what's missing from this repo.
+[`DEPLOYMENT.md`](DEPLOYMENT.md) covers the part every lab here stops
+short of: getting a module onto a machine that isn't yours — DKMS,
+module signing, and packaging.
 
 ## Contributing to your own repo
 
