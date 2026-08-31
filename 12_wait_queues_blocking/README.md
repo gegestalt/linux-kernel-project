@@ -199,3 +199,31 @@ value before deciding whether the loop `break`s out or calls
 `wait_event_interruptible()` — the exact check-and-clear moment the
 thundering-herd fix in this lab's README depends on.
 
+**`bq_poll`/`trigger_store`/init/exit**, verified:
+
+```bash
+$ gdb -q -batch -nx -ex "file wait_queues_blocking.ko" \
+    -ex "info line bq_poll" -ex "info line trigger_store" \
+    -ex "info line wait_queues_blocking_init" -ex "info line wait_queues_blocking_exit" \
+    wait_queues_blocking.ko
+Line 114 ... <bq_poll> ...
+Line 162 ... <trigger_store> ...
+Line 187 ... <wait_queues_blocking_init> ...
+Line 222 ... <wait_queues_blocking_exit> ...
+```
+
+`break bq_poll`, then drive a `select()`/`poll()` from a Python
+one-liner against `/dev/blocking_demo` (this lab's own README has one)
+— `next` through `poll_wait()` and watch `atomic_read(&data_ready)`
+decide the return value, the exact mechanism that makes `select()`
+return "readable" at the right moment without the caller ever calling
+`read()` first.
+
+`break wait_queues_blocking_exit`, `rmmod`, and step through in order:
+`timer_shutdown_sync(&producer_timer)` first, *then* the defensive
+`wake_up_interruptible_all()` this lab's own source comments explain is
+mostly unreachable in practice (module refcounting via `fops.owner`
+already prevents `rmmod` while a reader is blocked) — `print
+$lx_current()->comm` here will always read `rmmod`, never a reader,
+confirming that comment empirically.
+

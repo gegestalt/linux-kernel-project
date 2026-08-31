@@ -179,3 +179,37 @@ would have its increment silently overwritten. Switch `mode` to `1`
 for the whole read-modify-write, which is the structural reason the race
 can't happen in those modes — there's no window to be caught in.
 
+**`mode_store`/`reset_store`/init/exit**, all verified:
+
+```bash
+$ gdb -q -batch -nx -ex "file concurrency_locking.ko" \
+    -ex "info line mode_store" -ex "info line reset_store" \
+    -ex "info line concurrency_locking_init" -ex "info line concurrency_locking_exit" \
+    concurrency_locking.ko
+Line 193 ... <mode_store> ...
+Line 225 ... <reset_store> ...
+Line 247 ... <concurrency_locking_init> ...
+Line 269 ... <concurrency_locking_exit> ...
+```
+
+```gdb
+(gdb) break mode_store
+(gdb) continue
+```
+```bash
+echo 3 | sudo tee /sys/class/misc/race_demo/mode
+```
+```gdb
+(gdb) print value            # kstrtoint()'d from "3" - not the raw string
+(gdb) next                    # the `value < MODE_NONE || value > MODE_ATOMIC` range check
+(gdb) next                     # WRITE_ONCE(mode, value) - the actual switch
+(gdb) finish
+```
+
+`break reset_store`, trigger with `echo 1 | sudo tee
+/sys/class/misc/race_demo/reset`, and step through `reset_counters()` —
+note it takes `counter_spinlock` to zero `counter_plain` *and* separately
+calls `atomic64_set()` on `counter_atomic` with no lock at all, because
+an atomic write needs none. Two different reset mechanisms for two
+different concurrency strategies, both real code you can watch run.
+

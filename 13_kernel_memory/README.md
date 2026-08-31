@@ -192,3 +192,40 @@ instead of `kmalloc` at the same breakpoint and compare `finish`'s
 reported time-to-return between the two — a rougher but real-time echo
 of the `last_alloc_ns` this lab's sysfs `info` attribute already reports.
 
+**`do_free`/`free_store`/init/exit** — `do_free` (unlike `do_allocate`)
+is real and resolves as its own symbol, verified alongside the rest:
+
+```bash
+$ gdb -q -batch -nx -ex "file kernel_memory.ko" \
+    -ex "info line do_free" -ex "info line free_store" \
+    -ex "info line kernel_memory_init" -ex "info line kernel_memory_exit" \
+    kernel_memory.ko
+Line 145 ... <do_free> ...
+Line 252 ... <free_store> ...
+Line 324 ... <kernel_memory_init> ...
+Line 353 ... <kernel_memory_exit> ...
+```
+
+```gdb
+(gdb) break do_free
+(gdb) continue
+```
+```bash
+echo 1 | sudo tee /sys/kernel/kernel_memory/free
+```
+```gdb
+(gdb) print type              # which allocator's free path is about to run
+(gdb) next                     # the switch(type): kfree()/vfree()/kmem_cache_free()
+(gdb) print cur_free_ns          # zero until the next line sets it
+(gdb) next
+(gdb) print cur_free_ns           # now a real nanosecond count
+(gdb) finish
+```
+
+`break kernel_memory_exit`, `rmmod` **while an allocation is still
+held** (skip the `echo 1 | ... /free` step first), and step past the
+`if (cur_type != ALLOC_NONE)` check — you'll see it call `do_free()`
+itself before `kmem_cache_destroy()`, the exact defensive cleanup this
+lab's README describes as preventing a real driver from silently
+leaking memory on unload.
+
