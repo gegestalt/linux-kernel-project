@@ -321,12 +321,6 @@ visibly the same underlying variable (`counter` jumps straight to
 sudo rmmod debugfs_sysfs
 ```
 
-## 17 — next_steps
-
-No module to run — read [`17_next_steps/README.md`](17_next_steps/README.md)
-once the rest of this feels solid, and pick one thread (interrupts is the
-recommended first one — it extends lab 03 directly).
-
 ---
 
 ## If something doesn't match this document
