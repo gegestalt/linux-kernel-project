@@ -31,3 +31,6 @@ modules.order
 # Compiled userspace test helpers (see e.g. 08_open_release_cdev/test.c).
 # Keep the source, drop the binary.
 cdev_test
+
+# Claude Code agent worktrees (local scratch checkouts, not project content).
+.claude/
