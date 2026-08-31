@@ -135,3 +135,31 @@ make clean
   Rebuild, and work out — before testing it — what you'd now be able to
   read that was never written, and why capping writes at `data_len`
   instead of `BUF_SIZE` would make the buffer impossible to grow.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break rw_write
+(gdb) continue
+```
+```bash
+echo -n "hello" | sudo tee /dev/read_write_cdev0
+```
+```gdb
+(gdb) print count
+(gdb) print *ppos
+(gdb) print *buf@count            # read the __user source buffer directly - you're in tee's own mm context
+(gdb) print $lx_current()->comm   # confirm it's really "tee"
+(gdb) watch data_len               # continue; stops the instant data_len is updated
+(gdb) next                          # walk copy_from_user(), the *ppos update, the clamp logic, line by line
+```
+
+To see the short-write path specifically, break here, then from the
+guest push more than `BUF_SIZE` bytes at once (the big Python write in
+this lab's "Load and test" section) and `print to_copy` vs `print
+count` at the point `to_copy` gets clamped by `space` — the exact moment
+this driver decides to return less than what was asked for.
+

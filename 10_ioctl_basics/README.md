@@ -119,3 +119,31 @@ make clean            # also removes the ioctl_test binary
   current `__u32 mode`), end to end: header, `case` in the kernel switch,
   and a call from `ioctl_test.c`. This is the shortest path to feeling out
   the whole contract yourself.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break ioctl_basics_ioctl
+(gdb) continue
+```
+```bash
+sudo ./ioctl_test /dev/ioctl_basics0
+```
+```gdb
+(gdb) print cmd                # the raw encoded command number
+(gdb) print/x cmd               # compare against the _IOC() breakdown in this lab's README
+(gdb) next                      # step into the matching case
+```
+
+The most useful thing to watch here is the `switch (cmd)` dispatch
+itself: set the breakpoint, then `continue` through each of `ioctl_test`'s
+calls in turn and `print cmd` every time — you'll see the exact encoded
+values for `RESET`, `GET_STATS`, `SET_MODE`, `ECHO`, and finally the
+deliberately-unknown command that falls through to `default: return
+-ENOTTY;`. `finish` after stepping into the `IOCTL_BASICS_ECHO` case
+shows the transformed `req.buf` right before it's copied back to
+userspace.
+

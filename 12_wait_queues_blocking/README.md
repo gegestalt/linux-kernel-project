@@ -164,3 +164,38 @@ make clean
   interrupt a wait that's taking a while, which is exactly why it's easy
   to get this wrong in real drivers and only notice under specific
   conditions.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). Break on both sides
+of the producer/consumer pair to see the context difference this lab is
+built around, directly rather than inferred from the `comm=`/`in_*=`
+fields the driver itself logs:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break producer_fn
+(gdb) continue
+```
+
+When it hits (the timer firing): `print $lx_current()->comm` — note
+it's whatever task happened to be running, *not* a thread belonging to
+this driver. `bt` shows a softirq call chain
+(`run_timer_softirq`/`__softirqentry_text_start`-ish frames) rather than
+a syscall entry.
+
+```gdb
+(gdb) break bq_read
+(gdb) continue
+```
+```bash
+cat /dev/blocking_demo &
+```
+
+This time `print $lx_current()->comm` shows `cat`, and `bt` shows a real
+syscall chain (`ksys_read` → `vfs_read` → `bq_read`). Step through the
+`atomic_xchg(&data_ready, 0)` line with `next` and `print` its return
+value before deciding whether the loop `break`s out or calls
+`wait_event_interruptible()` — the exact check-and-clear moment the
+thundering-herd fix in this lab's README depends on.
+

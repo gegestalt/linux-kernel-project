@@ -62,3 +62,29 @@ make clean
 - Compare `hello.c` and `better_hello.c` line by line. Everything that
   changed is the entry-point mechanism and the metadata; the `printk()`
   payload is identical.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) break do_init_module
+(gdb) continue
+```
+```bash
+sudo insmod ./better_hello.ko
+```
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break my_init          # not init_module - this lab uses module_init()'s indirection
+(gdb) continue
+```
+
+The interesting difference from lab 01: `break init_module` here would
+fail to resolve (no such symbol) — `module_init(my_init)` registers
+`my_init` through a pointer in the `.initcall` mechanism rather than
+exporting a fixed name, so you have to break on the *actual* function
+name this time. `info symbol my_init` after the break confirms which
+section (`.init.text`) it's sitting in, matching this lab's own
+`objdump -h` exercise above.
+

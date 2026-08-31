@@ -115,3 +115,32 @@ make clean
   `module_param_cb()` lets you supply your *own* set/get pair when you do
   want a callback on write (a natural next step once you've felt the limit
   of the free version here).
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break module_params_read
+(gdb) continue
+```
+```bash
+cat /dev/module_params_demo
+```
+```gdb
+(gdb) print repeat_count      # the live module_param value, no accessor needed
+(gdb) print verbose
+(gdb) next                     # step through the reps-clamping and the repeat loop itself
+```
+
+The point worth confirming live: change `repeat_count` from the guest
+shell (`echo 4 | sudo tee /sys/module/module_params/parameters/repeat_count`)
+*without* continuing past this breakpoint first, then `continue` and hit
+it again — `print repeat_count` shows the new value immediately. There's
+no `module_params_repeat_count_store()` function to break on, because
+`module_param()` never generates one; the sysfs write lands directly on
+the variable, which is exactly what this lab's README explains in prose
+and what you're now confirming by watching the raw memory change under
+GDB.
+

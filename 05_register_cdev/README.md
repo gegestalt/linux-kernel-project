@@ -120,3 +120,32 @@ make clean
   same major you extracted from `dmesg` should show up there, which is
   actually a more idiomatic way to discover it than grepping the kernel log
   (useful once you don't control the modinsert-time log yourself).
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break register_cdev_read
+(gdb) continue
+```
+```bash
+cat /dev/register_cdev
+```
+```gdb
+(gdb) print *offset                # starts at 0 on a fresh open
+(gdb) next                          # past the scnprintf() building `message`
+(gdb) print message                 # the exact kernel-stack buffer about to cross to userspace
+(gdb) print bytes_to_copy
+(gdb) next                          # step over copy_to_user()
+(gdb) print *offset                 # advanced by bytes_to_copy
+```
+
+Because `message` is a plain stack array (not heap-allocated), this is a
+good lab for getting comfortable with `print message` on a local array
+versus `print buffer` on a `kzalloc()`'d pointer elsewhere in this repo
+(lab 09) — same debugger command, genuinely different kind of memory
+underneath. `break register_cdev_open` and `watch open_count` are also
+worth trying against the two-concurrent-opens exercise above.
+

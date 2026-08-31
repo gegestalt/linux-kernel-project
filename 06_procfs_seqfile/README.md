@@ -128,3 +128,31 @@ make clean
   functions this module borrows directly instead of writing its own
   `read`/`llseek`. This is the same "supply data, borrow generic glue"
   shape as `simple_read_from_buffer()` in lab 03.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This lab is the
+best one in the repo for actually *watching* the seq_file iterator
+contract run, rather than just reading about the order it's called in:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break events_seq_start
+(gdb) break events_seq_next
+(gdb) break events_seq_show
+(gdb) break events_seq_stop
+(gdb) continue
+```
+```bash
+cat /proc/procfs_demo/events
+```
+
+Each `continue` from here lands on the next callback in the sequence —
+you'll see `start` once, then `show`/`next` alternating once per
+buffered event, then `stop` exactly once at the end, even if
+`event_count` is 0 (confirm this by running `echo clear | sudo tee
+/proc/procfs_demo/events` first, so `start` immediately returns `NULL`
+and you can watch `stop` still fire to match it). `print *pos` in
+`events_seq_next` is the clearest way to see the iterator's position
+counter advancing one record at a time.
+

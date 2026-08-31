@@ -145,3 +145,32 @@ make clean
   under memory pressure or when the shared workqueue is busy with other
   work — a dedicated kthread has its own scheduling identity, a shared
   workqueue's work items compete with everyone else's.)
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md).
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) lx-ps                     # find "kthread_demo_producer" and its pid before you break anything
+(gdb) break producer_thread_fn
+(gdb) continue
+```
+
+At the breakpoint: `print current->pid` should match what `lx-ps`
+already showed you, and `print current->comm` reads
+`kthread_demo_producer` — a real, schedulable task, unlike lab 14's
+timer callback. `next` through one loop iteration to watch
+`ring[ring_head]` get written and `ring_head`/`ring_count` update, then
+`step` into `msleep_interruptible()` (it genuinely descends into
+scheduler code, confirming this thread can sleep) and `lx-ps` again
+while it's asleep in there — you should see its state change from
+running to interruptible sleep.
+
+To watch the cooperative-shutdown path specifically:
+`break kthread_should_stop` (a tiny inline-ish helper, but resolvable
+once `lx-symbols` has loaded), `continue`, then from the guest
+`echo stop | sudo tee /sys/kernel/kthreads_demo/control` — you'll land
+here on the very next loop check after `kthread_stop()` wakes the
+thread, before it actually returns from `producer_thread_fn()`.
+

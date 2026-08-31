@@ -172,3 +172,38 @@ make clean
   different device nodes — `misc_register()` will fail the second time
   because `DRIVER_NAME` is a fixed name; read the resulting `dmesg` error
   path (`err_misc`).
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). This is the lab
+where stepping through GDB pays off most — you can watch the button read
+turn into the LED write, one line at a time, including stepping *into*
+the GPIO subsystem's own backend code:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break gpioctrl_sample_once
+(gdb) continue
+```
+```bash
+GPIOCHIP=$(gpiodetect | grep gpio-sim | awk '{print $1}')
+echo pull-up | sudo tee /sys/devices/platform/gpio-sim.0/$GPIOCHIP/sim_gpio20/pull
+```
+```gdb
+(gdb) next                       # past gpiod_get_value_cansleep(button)
+(gdb) print button_value
+(gdb) next                        # past the invert ternary
+(gdb) print desired_led
+(gdb) step                         # STEP INTO gpiod_set_value_cansleep() itself
+(gdb) bt                            # now inside gpio-sim.c's own set-value backend
+(gdb) print *state                  # the whole driver state struct, live
+```
+
+Two more useful breakpoints for this specific module: `gpioctrl_write`
+(to watch the `invert=`/`poll_ms=`/`sync`/`reset_stats` command parser
+decide which branch to take) and `gpioctrl_work_fn` (to catch the
+periodic poll running from a `kworker` — `lx-ps` right after hitting it
+will show you which one). `watch state->samples` is a clean way to stop
+the instant the poll counter increments, without needing a function
+breakpoint at all.
+

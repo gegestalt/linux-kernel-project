@@ -139,3 +139,35 @@ make clean            # also removes the stress_test binary
   (interrupt handlers, softirqs, `PREEMPT_RT` kernels change some of
   this) — this lab only exercises the simplest, always-safe case:
   process-context code taking its own lock around its own data.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). One honest caveat
+first: a KGDB break-in stops **every CPU**, so you cannot literally
+watch two `write()` calls interleave live — the value of GDB here is
+inspecting the *vulnerable window* and the lock state directly, not
+catching a race in the act.
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break increment_once
+(gdb) continue
+```
+```bash
+echo 0 | sudo tee /sys/class/misc/race_demo/mode   # MODE_NONE
+echo x | sudo tee /dev/race_demo
+```
+```gdb
+(gdb) next               # past `tmp = READ_ONCE(counter_plain);`
+(gdb) print tmp            # the value this "thread" has locally cached
+(gdb) print counter_plain   # the shared value - identical right now, but about to diverge
+```
+
+Right here is the entire bug: any other writer that ran between this
+`next` and the `WRITE_ONCE(counter_plain, tmp + 1);` a few lines down
+would have its increment silently overwritten. Switch `mode` to `1`
+(spinlock) or `2` (mutex), re-break, and compare: `print counter_spinlock`
+/ `print counter_mutex` show the lock actually held (non-zero/owned)
+for the whole read-modify-write, which is the structural reason the race
+can't happen in those modes — there's no window to be caught in.
+

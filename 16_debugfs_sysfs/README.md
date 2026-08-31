@@ -136,3 +136,35 @@ make clean
   "there is no stability guarantee" language — the contrast is the point
   of this whole lab, stated in the kernel's own words rather than this
   README's.
+
+## Debugging with GDB
+
+Setup: [`../GDB_DEBUGGING.md`](../GDB_DEBUGGING.md). The single most
+convincing GDB session in this repo for this lab's central claim — that
+debugfs's variable-binding helpers run *none* of this driver's own code:
+
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break enabled_store
+(gdb) break increment_store
+(gdb) continue
+```
+```bash
+echo 1 | sudo tee /sys/kernel/debugfs_sysfs_demo/increment    # sysfs side
+```
+```gdb
+# breaks at increment_store, as expected. delete it, continue, then:
+```
+```bash
+echo 9999 | sudo tee /sys/kernel/debug/debugfs_sysfs_demo/counter_raw   # debugfs side
+```
+
+**Nothing breaks.** `enabled_store`/`increment_store` are never entered
+for the debugfs-side writes, because `debugfs_create_u32()` wired
+`counter_raw` directly to generic kernel-provided get/set functions that
+never call into this module at all — you can confirm this by instead
+breaking on `debugfs_create_u32` itself right at module init and
+`step`-ing through it once to see it register a fixed pair of accessors
+this driver never wrote a line of. `print counter` before and after the
+debugfs write shows the same underlying variable changed anyway.
+
