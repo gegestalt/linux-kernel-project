@@ -163,3 +163,70 @@ this lab's "Load and test" section) and `print to_copy` vs `print
 count` at the point `to_copy` gets clamped by `space` — the exact moment
 this driver decides to return less than what was asked for.
 
+**`rw_read` — the read-side mirror**, verified along with `rw_open`,
+`rw_llseek`, and both lifecycle functions:
+
+```bash
+$ gdb -q -batch -nx -ex "file read_write_cdev.ko" \
+    -ex "info line rw_read" -ex "info line rw_open" -ex "info line rw_llseek" \
+    -ex "info line read_write_cdev_init" -ex "info line read_write_cdev_exit" \
+    read_write_cdev.ko
+Line 76 of "read_write_cdev.c" starts at address 0x408 <rw_read> ...
+Line 51 of "read_write_cdev.c" starts at address 0x6e8 <rw_open> ...
+Line 152 of "read_write_cdev.c" starts at address 0x128 <rw_llseek> ...
+Line 166 of "read_write_cdev.c" starts at address 0xbf0 <read_write_cdev_init> ...
+Line 215 of "read_write_cdev.c" starts at address 0xb68 <read_write_cdev_exit> ...
+```
+
+```gdb
+(gdb) break rw_read
+(gdb) continue
+```
+```bash
+sudo cat /dev/read_write_cdev0
+```
+```gdb
+(gdb) print *ppos                  # 0 on a fresh open
+(gdb) print data_len                 # how much is actually there to read
+(gdb) next                            # past the `*ppos >= data_len` EOF check
+(gdb) print available                  # data_len - *ppos
+(gdb) print to_copy                      # min(count, available)
+(gdb) finish
+(gdb) continue                             # cat's SECOND read() call, hits the breakpoint again
+(gdb) print *ppos                            # now equals data_len - the EOF branch returns 0 next
+```
+
+**`read_write_cdev_init` — the four-step modern registration sequence**
+(`alloc_chrdev_region` → `cdev_init`/`cdev_add` → `class_create` →
+`device_create`), each with its own error path — the same shape as lab
+03's `gpioctrl_init`, worth stepping through the same way:
+
+```gdb
+(gdb) break do_init_module
+(gdb) continue
+```
+```bash
+sudo insmod ./read_write_cdev.ko
+```
+```gdb
+(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+(gdb) break read_write_cdev_init
+(gdb) continue
+(gdb) next          # kzalloc(BUF_SIZE, GFP_KERNEL)
+(gdb) print buffer
+(gdb) next            # alloc_chrdev_region()
+(gdb) print devt        # packed major/minor - MAJOR(devt) and MINOR(devt) also work here
+(gdb) next               # cdev_init() + cdev_add()
+(gdb) next
+(gdb) next                # class_create() - watch it return a real struct class *, not NULL
+(gdb) print rw_class
+(gdb) next                 # device_create() - THIS is the call that actually makes /dev/read_write_cdev0 appear
+(gdb) finish
+```
+
+`rw_llseek` is a one-line pass-through to the generic
+`fixed_size_llseek()` helper — `step` (not `next`) into it from a
+breakpoint here to actually watch the kernel's own generic
+`SEEK_SET`/`SEEK_CUR`/`SEEK_END` bounds-checking logic run, the same
+"borrow generic glue" pattern as lab 06's `seq_read()`/`seq_lseek()`.
+
