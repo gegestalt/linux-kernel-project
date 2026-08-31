@@ -199,3 +199,44 @@ value before deciding whether the loop `break`s out or calls
 `wait_event_interruptible()` — the exact check-and-clear moment the
 thundering-herd fix in this lab's README depends on.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+
+```bash
+sudo bpftrace -l 'kprobe:wait_queues_blocking:*'
+```
+```
+kprobe:wait_queues_blocking:bq_poll
+kprobe:wait_queues_blocking:bq_read
+kprobe:wait_queues_blocking:event_id_show
+kprobe:wait_queues_blocking:producer_fn
+kprobe:wait_queues_blocking:trigger_store
+kprobe:wait_queues_blocking:waiters_show
+```
+
+```bash
+sudo bpftrace -e 'kprobe:wait_queues_blocking:producer_fn { printf("producer_fn fired, current task=%s[%d]\n", comm, pid); }' &
+sleep 4
+```
+
+Real captured output over ~4 seconds (`interval_ms=300` — this fires on
+its own, no manual trigger needed):
+
+```
+producer_fn fired, current task=cc1[176973]
+producer_fn fired, current task=cc1[177315]
+producer_fn fired, current task=cc1[177342]
+producer_fn fired, current task=llvmpipe-3[3814]
+producer_fn fired, current task=swapper/1[0]
+producer_fn fired, current task=llvmpipe-1[3814]
+```
+
+Every hit is the *same* timer callback, and `current task=` is
+different almost every time — a compiler process (`cc1`, from an
+unrelated kernel build running elsewhere on this machine), a graphics
+process (`llvmpipe`), even `swapper/1` (CPU 1's idle task). None of them
+"belong" to this driver — exactly what this lab's text says about
+softirq context, now shown as live, unscripted variety instead of one
+static example.
+

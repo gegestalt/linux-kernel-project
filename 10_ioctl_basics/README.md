@@ -147,3 +147,37 @@ deliberately-unknown command that falls through to `default: return
 shows the transformed `req.buf` right before it's copied back to
 userspace.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+`ioctl_basics_ioctl(struct file *file, unsigned int cmd, unsigned long arg)`
+puts the raw encoded command number at `arg1`:
+
+```bash
+sudo bpftrace -e 'kprobe:ioctl_basics:ioctl_basics_ioctl { printf("ioctl cmd=0x%x by %s[%d]\n", arg1, comm, pid); }' &
+sleep 1.5
+sudo ./ioctl_test /dev/ioctl_basics0
+```
+
+Real captured output — the entire `ioctl_test` run, all 10 calls, live:
+
+```
+Attached 1 probe
+ioctl cmd=0x6b01 by ioctl_test[161624]        # RESET (_IO)
+ioctl cmd=0x80206b02 by ioctl_test[161624]    # GET_STATS (_IOR)
+ioctl cmd=0xc0406b04 by ioctl_test[161624]    # ECHO identity (_IOWR)
+ioctl cmd=0x40046b03 by ioctl_test[161624]    # SET_MODE upper (_IOW)
+ioctl cmd=0xc0406b04 by ioctl_test[161624]    # ECHO upper
+ioctl cmd=0x40046b03 by ioctl_test[161624]    # SET_MODE reverse
+ioctl cmd=0xc0406b04 by ioctl_test[161624]    # ECHO reverse
+ioctl cmd=0x40046b03 by ioctl_test[161624]    # SET_MODE invalid (still reaches the kernel - EINVAL happens inside)
+ioctl cmd=0x6b63 by ioctl_test[161624]        # the deliberately-unknown command
+ioctl cmd=0x80206b02 by ioctl_test[161624]    # GET_STATS (final)
+```
+
+Every command number here matches this lab's own `_IOC()` breakdown
+exactly (`0x6b` = `'k'`, the low byte is `nr`) — computed live by the
+kernel, not asserted in the README. Compare against
+`strace -e ioctl ./ioctl_test /dev/ioctl_basics0`, which decodes the
+same numbers back into direction/size/type/nr independently.
+

@@ -168,3 +168,63 @@ breaking on `debugfs_create_u32` itself right at module init and
 this driver never wrote a line of. `print counter` before and after the
 debugfs write shows the same underlying variable changed anyway.
 
+One catch worth knowing before you try `break enabled_store`:
+`enabled_store` is a very common name for a `kobj_attribute` toggle
+handler — `grep -w enabled_store /proc/kallsyms` on this kernel turns up
+five *other*, unrelated functions sharing that exact name. GDB will
+either prompt you to pick which one or land on one that isn't this
+driver's — if `break enabled_store` behaves strangely, that's why; use
+`break debugfs_sysfs.c:84` (or wherever `enabled_store` actually starts
+in the file) to disambiguate by location instead.
+
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+The same name collision bites `bpftrace` even harder — it refuses to
+attach outright rather than guessing:
+
+```bash
+sudo bpftrace -e 'kprobe:enabled_store { printf("hit\n"); }'
+```
+```
+ERROR: Unable to attach probe: kprobe:enabled_store.
+```
+
+The fix is the professional one: scope the probe to this specific
+module.
+
+```bash
+sudo bpftrace -l 'kprobe:debugfs_sysfs:*'
+```
+```
+kprobe:debugfs_sysfs:counter_show
+kprobe:debugfs_sysfs:enabled_show
+kprobe:debugfs_sysfs:enabled_store
+kprobe:debugfs_sysfs:increment_store
+kprobe:debugfs_sysfs:info_read
+```
+
+```bash
+sudo bpftrace -e '
+kprobe:debugfs_sysfs:enabled_store   { printf("-> enabled_store hit, by %s[%d]\n", comm, pid); }
+kprobe:debugfs_sysfs:increment_store { printf("-> increment_store hit, by %s[%d]\n", comm, pid); }
+' &
+sleep 1.5
+echo 1 | sudo tee /sys/kernel/debugfs_sysfs_demo/increment > /dev/null    # sysfs side
+sleep 1
+echo 9999 | sudo tee /sys/kernel/debug/debugfs_sysfs_demo/counter_raw > /dev/null   # debugfs side
+```
+
+Real captured output:
+
+```
+Attached 2 probes
+-> increment_store hit, by tee[143393]
+```
+
+One line, for the sysfs write only. The debugfs write produces total
+silence — yet `cat /sys/kernel/debugfs_sysfs_demo/counter` afterward
+shows `9999` anyway. Live, unscripted proof of this lab's whole point:
+the debugfs path changes the same variable through code that was never
+written for this driver at all.
+

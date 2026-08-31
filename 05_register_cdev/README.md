@@ -149,3 +149,36 @@ versus `print buffer` on a `kzalloc()`'d pointer elsewhere in this repo
 underneath. `break register_cdev_open` and `watch open_count` are also
 worth trying against the two-concurrent-opens exercise above.
 
+## Tracing this live
+
+Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
+
+```bash
+sudo bpftrace -l 'kprobe:register_cdev:*'
+```
+```
+kprobe:register_cdev:register_cdev_open
+kprobe:register_cdev:register_cdev_read
+kprobe:register_cdev:register_cdev_release
+```
+
+```bash
+sudo bpftrace -e 'kprobe:register_cdev:register_cdev_read { printf("read hit by %s[%d]\n", comm, pid); }' &
+sleep 1.5
+sudo cat /dev/register_cdev
+```
+
+Real captured output:
+
+```
+Attached 1 probe
+read hit by cat[156385]
+read hit by cat[156385]
+```
+
+Same two-call pattern as lab 04. If you want to see *why* each call
+happens (not just that it did), `../FTRACE_TRACING.md`'s
+`function_graph` section shows the full call tree for this exact
+function — including the surprising amount of printk/console machinery
+one `pr_info()` inside it pulls in.
+
