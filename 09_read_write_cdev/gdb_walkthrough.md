@@ -162,10 +162,16 @@ succeed," with different concrete `errno`s.
 ### Step 4 — `llseek`: a real, boundary-checked reposition
 
 ```gdb
-(gdb) delete
+(gdb) delete <the rw_write breakpoint's number — `info breakpoints` if you've lost count>
 (gdb) break rw_llseek
 (gdb) continue
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint, but first
+asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
+prompt can silently swallow your next command instead of actually
+deleting anything, leaving a stale breakpoint active. Naming the
+number, as above, skips the prompt.)
 ```bash
 # vmb:
 dd if=/dev/read_write_cdev0 bs=1 skip=4090 count=6 2>/dev/null
@@ -183,9 +189,65 @@ gets for free by calling it, rather than re-implementing it.
 
 ## Cleanup
 
+**`break read_write_cdev_exit` does not work if you try it directly —
+confirmed live, and worth understanding why, since it affects every
+module in this repo whose cleanup function uses the modern
+`module_exit()` macro (every module except 01).** `read_write_cdev_exit`
+is marked `__exit`, which places it in its own ELF section,
+`.exit.text`, separate from the module's regular `.text`. `lx-symbols`
+relocates only a fixed, hardcoded list of extra sections when it maps a
+loaded module's addresses (`_section_arguments()` in this kernel's
+`scripts/gdb/linux/symbols.py`), and `.exit.text` simply isn't in that
+list. So the naive breakpoint silently resolves to the function's raw,
+unrelocated file offset instead of a real kernel address, and setting
+it appears to succeed with no error — it just never fires. `rmmod`
+completes normally, dmesg shows the unload message, and GDB sits at
+`Continuing.` forever having quietly missed it.
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function:
+
 ```gdb
-(gdb) delete
+(gdb) delete <the rw_llseek breakpoint's number — `info breakpoints` if unsure>
+(gdb) break __do_sys_delete_module
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod read_write_cdev
+```
+
+Advance to the actual call site and read the real address straight out
+of the kernel's own struct, bypassing GDB's broken section table
+entirely (check the line with `list` if it's drifted on a different
+kernel version — you want the `mod->exit();` line in
+`kernel/module/main.c`'s `delete_module` syscall handler):
+
+```gdb
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320680
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`, which only
+fixes the kernel image's own load address. Always use whatever `print
+mod->exit` gives you right now.) **Do not `step` into it from here** —
+with no relocated line table, GDB can't bound the function, so `step`
+free-runs straight through the rest of the exit function and beyond,
+confirmed live to run well past `rmmod`'s own completion before
+stopping on its own. `Ctrl-C` recovers you (same guest-freeze/interrupt
+behavior as anywhere else in KGDB) if you've already typed it.
+
+Register the section's real address with GDB the same way `lx-symbols`
+does it for the sections it already knows about, then the normal
+breakpoint resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/09_read_write_cdev/read_write_cdev.ko -s .exit.text 0xffff80007c320680
 (gdb) break read_write_cdev_exit
+Breakpoint N at 0xffff80007c320680: file read_write_cdev.c, line 215.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
 (gdb) continue
 ```
 ```bash
@@ -193,7 +255,10 @@ gets for free by calling it, rather than re-implementing it.
 rmmod read_write_cdev
 ```
 ```gdb
+Thread N hit Breakpoint N, read_write_cdev_exit () at read_write_cdev.c:215
+215		device_destroy(rw_class, devt);
 (gdb) print data_len
+(gdb) continue
 ```
 ```bash
 # vmb:

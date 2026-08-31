@@ -94,10 +94,16 @@ line runs once, above the `while` loop). Set a breakpoint *inside* the
 loop body specifically to catch every iteration:
 
 ```gdb
-(gdb) delete
+(gdb) delete <the producer_thread_fn breakpoint's number — `info breakpoints` if unsure>
 (gdb) break kthreads.c:71
 (gdb) continue
 ```
+
+(Bare `delete` with no argument deletes *every* breakpoint, but first
+asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
+prompt can silently swallow your next command instead of actually
+deleting anything. Naming the number skips the prompt; same reasoning
+applies to every `delete` in the rest of this walkthrough.)
 
 (Line 71 is `ring[ring_head].seq = next_seq++;` — the first real line
 inside `while (!kthread_should_stop())`; verify it matches your build
@@ -149,7 +155,7 @@ Now delete this breakpoint, let the thread go to sleep in
 `msleep_interruptible()`, and catch it *there* instead:
 
 ```gdb
-(gdb) delete
+(gdb) delete <the kthreads.c:71 breakpoint's number>
 ```
 
 Set `interval_ms` high first so you have time to act before it wakes
@@ -206,7 +212,7 @@ just marked for future cleanup.
 ### Step 4 — `stop_producer`/`start_producer`: the handoff itself
 
 ```gdb
-(gdb) delete
+(gdb) delete <the kthread_should_stop breakpoint's number>
 (gdb) break stop_producer
 (gdb) break start_producer
 ```
@@ -236,7 +242,7 @@ new task.
 ### Step 5 — `kthread_demo_read`: drain-on-read, not blocking
 
 ```gdb
-(gdb) delete
+(gdb) delete <the stop_producer and start_producer breakpoints' numbers>
 (gdb) break kthread_demo_read
 (gdb) continue
 ```
@@ -262,9 +268,22 @@ more to arrive.
 
 ## Cleanup
 
+**`break kthreads_exit` does not work if you try it directly —
+confirmed live.** `kthreads_exit` is marked `__exit`, placing it in its
+own ELF section, `.exit.text`, which `lx-symbols` never relocates (its
+hardcoded section list in `scripts/gdb/linux/symbols.py` doesn't
+include `.init.text`/`.exit.text`). The breakpoint silently resolves to
+a raw, unrelocated file offset instead of a real address — no error, it
+just never fires. This affects every module in this repo using the
+modern `module_exit()` macro (every module except 01).
+
+**The fix, verified live** — break on the generic kernel hook that
+calls into every module's exit function, then read the real address
+out of the kernel's own struct:
+
 ```gdb
-(gdb) delete
-(gdb) break kthreads_exit
+(gdb) delete <the kthread_demo_read breakpoint's number>
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -272,8 +291,35 @@ more to arrive.
 rmmod kthreads
 ```
 ```gdb
-Thread 2 hit Breakpoint N, kthreads_exit () at kthreads.c:306
+(gdb) advance kernel/module/main.c:863
+(gdb) print mod->exit
+$N = (void (*)(void)) 0xffff80007c320870
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot regardless of `nokaslr`. Always use
+whatever `print mod->exit` gives you right now.) **Do not `step` into
+it from here** — with no relocated line table GDB can't bound the
+function and `step` free-runs straight past it; `Ctrl-C` recovers you.
+Register the section the way `lx-symbols` does for the sections it
+already knows about, and the normal breakpoint then resolves cleanly:
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/15_kthreads/kthreads.ko -s .exit.text 0xffff80007c320870
+(gdb) break kthreads_exit
+Breakpoint N at 0xffff80007c320870: file kthreads.c, line 306.
+(gdb) delete <the __do_sys_delete_module breakpoint's number>
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod kthreads
+```
+```gdb
+Thread N hit Breakpoint N, kthreads_exit () at kthreads.c:306
+306		stop_producer();
 (gdb) next   # stop_producer() - same cooperative shutdown as step 3, now via module exit
+(gdb) continue
 ```
 ```bash
 # vmb:
