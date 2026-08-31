@@ -165,9 +165,11 @@ echo x | sudo tee /dev/race_demo
 (gdb) print counter_plain   # the shared value - identical right now, but about to diverge
 ```
 
-(`break increment_once` directly would fail — see this lab's "Tracing
-this live" section below for how that was actually discovered, via
-`bpftrace -l` simply not listing it.)
+(`break increment_once` directly would fail: `increment_once()` is
+`static` and small enough that GCC inlines it entirely into
+`race_write()`, leaving no symbol of its own — confirmed via
+`gdb -batch -ex "info line increment_once"` reporting an address
+*inside* `race_write`, not a separate function.)
 
 Right here is the entire bug: any other writer that ran between this
 `next` and the `WRITE_ONCE(counter_plain, tmp + 1);` a few lines down
@@ -176,59 +178,4 @@ would have its increment silently overwritten. Switch `mode` to `1`
 / `print counter_mutex` show the lock actually held (non-zero/owned)
 for the whole read-modify-write, which is the structural reason the race
 can't happen in those modes — there's no window to be caught in.
-
-## Tracing this live
-
-Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
-**`increment_once` isn't in the discovery list at all** — GCC inlined it
-into `race_write`:
-
-```bash
-sudo bpftrace -l 'kprobe:concurrency_locking:*'
-```
-```
-kprobe:concurrency_locking:counter_show
-kprobe:concurrency_locking:mode_show
-kprobe:concurrency_locking:mode_store
-kprobe:concurrency_locking:race_read
-kprobe:concurrency_locking:race_write
-kprobe:concurrency_locking:reset_store
-```
-
-No `increment_once` — that's the discovery step *telling* you it's
-inlined, rather than you having to already know. Probe `race_write`
-instead:
-
-```bash
-sudo bpftrace -e 'kprobe:concurrency_locking:race_write { printf("HIT %s[%d] bytes=%d\n", comm, pid, arg2); }' &
-sleep 1.5
-echo -n "x" | sudo tee /dev/race_demo   # mode=3 (atomic) at capture time
-```
-
-Real captured output:
-
-```
-Attached 1 probe
-HIT tee[175672] bytes=1
-```
-
-One genuine, real debugging story from building this section: the first
-several attempts at this exact capture produced nothing at all, despite
-the kprobe registering at the correct address
-(`/sys/kernel/debug/kprobes/list` confirmed it). The actual cause:
-`/dev/race_demo` had silently become a **stale plain file** — `ls -la`
-showed `-rw-r--r--`, not `crw-rw-rw-` — left over from an earlier `tee`
-writing to that path while the module wasn't loaded (writing to a
-nonexistent device path just creates an ordinary file there instead of
-erroring). Every "successful" write was landing in that dead file, never
-reaching the driver. `sudo rm -f /dev/race_demo` before reloading the
-module fixed it. Worth knowing: a device node behaving strangely is
-worth an `ls -la` before anything more exotic.
-
-bpftrace can't literally catch two writers' race window interleaving
-live either — a kprobe fires once per call, synchronously, with no
-special visibility into what a *different* CPU is doing at that instant.
-The stress test's own lost-update count remains the reliable signal for
-the race itself; this probe is for confirming *which* code path ran and
-how fast, not for catching the interleaving in the act.
 

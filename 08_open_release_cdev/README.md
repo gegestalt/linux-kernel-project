@@ -135,38 +135,3 @@ descriptors `test.c` duplicates, no matter how many times you'd expect
 "a close" to trigger it. `bt` at that breakpoint also shows the real VFS
 call chain (`__fput` → `...→ my_release`) rather than a raw `close()`.
 
-## Tracing this live
-
-Setup and general method: [`../FTRACE_TRACING.md`](../FTRACE_TRACING.md).
-
-```bash
-sudo bpftrace -l 'kprobe:open_release_cdev:*'
-```
-```
-kprobe:open_release_cdev:my_open
-kprobe:open_release_cdev:my_release
-```
-
-```bash
-sudo bpftrace -e '
-kprobe:open_release_cdev:my_open    { printf("my_open hit by %s[%d]\n", comm, pid); }
-kprobe:open_release_cdev:my_release { printf("my_release hit by %s[%d]\n", comm, pid); }
-' &
-sleep 1.5
-exec 3</dev/open_release_cdev0
-exec 3<&-
-```
-
-Real captured output:
-
-```
-Attached 2 probes
-my_open hit by bash[157743]
-my_release hit by bash[157743]
-```
-
-One open, one release — matching a single `exec 3<...` / `exec 3<&-`
-pair exactly. Rerun the `dup()` exercise from this lab's "Load and test"
-section with both probes still attached to watch `my_release` fire only
-once, no matter how many duplicated descriptors got closed first.
-
