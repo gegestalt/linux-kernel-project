@@ -1,8 +1,8 @@
 # 16 — debugfs_sysfs
 
 The exact same two pieces of state (`counter`, `enabled`), exposed twice:
-once through hand-written sysfs attributes (the pattern every earlier lab
-in this repo uses), once through debugfs's variable-binding helpers. Same
+once through hand-written sysfs attributes (the pattern every earlier
+module in this repo uses), once through debugfs's variable-binding helpers. Same
 data, radically different amount of code and radically different
 guarantees.
 
@@ -12,7 +12,7 @@ guarantees.
   ships under `/sys/...`, breaking it is treated the same as breaking any
   other syscall-level promise (see `Documentation/ABI/` in
   `../../linux_mainline`). That's why every sysfs attribute in this repo,
-  including this lab's, is a hand-written `show()`/`store()` pair: the
+  including this module's, is a hand-written `show()`/`store()` pair: the
   validation and side effects are the point, not incidental boilerplate.
 - **debugfs is explicitly, documentedly *not* an ABI.**
   `Documentation/filesystems/debugfs.rst` says so directly — files can
@@ -134,17 +134,17 @@ make clean
   examples of sysfs attributes with formal stability documentation, then
   `Documentation/filesystems/debugfs.rst` for debugfs's explicit
   "there is no stability guarantee" language — the contrast is the point
-  of this whole lab, stated in the kernel's own words rather than this
+  of this whole module, stated in the kernel's own words rather than this
   README's.
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
 Setup: [`../gdb_debugging.md`](../gdb_debugging.md). The single most
-convincing GDB session in this repo for this lab's central claim — that
+convincing GDB session in this repo for this module's central claim — that
 debugfs's variable-binding helpers run *none* of this driver's own code:
 
 ```gdb
@@ -202,7 +202,7 @@ followed by the *unchecked* `debugfs_create_dir()`/`debugfs_create_u32()`/
 `debugfs_create_bool()`/`debugfs_create_file()` calls — `print
 demo_debugfs_dir` after each one still shows a real pointer (or a
 harmless dummy on a kernel without `CONFIG_DEBUG_FS`), the live
-confirmation of this lab's own comment that debugfs setup failure is
+confirmation of this module's own comment that debugfs setup failure is
 never treated as fatal here, unlike the `sysfs_create_group()` call just
 before it which *is* checked and *does* unwind on failure.
 

@@ -21,7 +21,7 @@ real, schedulable thread rather than a timer or workqueue.
   returns. By the time it returns, the thread is provably gone — contrast
   with just setting a flag and hoping, which has no such guarantee.
 - **A thread genuinely sleeping in process context** —
-  `msleep_interruptible()` between produced items, something lab
+  `msleep_interruptible()` between produced items, something module
   [14](../14_timers_workqueues/)'s timer callback is not allowed to do.
   This is what makes `kthread_stop()` return *promptly* rather than
   waiting out however much of the sleep interval remained: waking the
@@ -34,8 +34,8 @@ real, schedulable thread rather than a timer or workqueue.
   cycle cleanly.
 - A deliberately simple, **non-blocking** `/dev/kthread_demo` (drains
   whatever's buffered on each fresh read, returns 0 if nothing's arrived)
-  — this lab is about the producer's thread lifecycle, not consumer-side
-  blocking, which lab [12](../12_wait_queues_blocking/) already covers.
+  — this module is about the producer's thread lifecycle, not consumer-side
+  blocking, which module [12](../12_wait_queues_blocking/) already covers.
 
 ## Files
 
@@ -138,7 +138,7 @@ make clean
   should stop — a direct, timed demonstration of why the interruptible
   variant is the right default for a loop that needs to shut down
   promptly.
-- Compare this producer's shape against lab [14](../14_timers_workqueues/)'s
+- Compare this producer's shape against module [14](../14_timers_workqueues/)'s
   workqueue heartbeat: both run in process context and can both sleep, so
   when would you actually reach for a dedicated `kthread_run()` thread
   instead of `schedule_delayed_work()`? (Hint: think about what happens
@@ -148,7 +148,7 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
@@ -163,7 +163,7 @@ Setup: [`../gdb_debugging.md`](../gdb_debugging.md).
 
 At the breakpoint: `print current->pid` should match what `lx-ps`
 already showed you, and `print current->comm` reads
-`kthread_demo_producer` — a real, schedulable task, unlike lab 14's
+`kthread_demo_producer` — a real, schedulable task, unlike module 14's
 timer callback. `next` through one loop iteration to watch
 `ring[ring_head]` get written and `ring_head`/`ring_count` update, then
 `step` into `msleep_interruptible()` (it genuinely descends into

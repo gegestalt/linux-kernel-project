@@ -1,7 +1,7 @@
 # GDB walkthrough — 15_kthreads
 
 `kthreads.c` spawns a genuine, dedicated kernel thread with
-`kthread_run()` — unlike lab 03's workqueue callback or lab 14's timer,
+`kthread_run()` — unlike module 03's workqueue callback or module 14's timer,
 this producer has its own persistent `task_struct`, its own PID, and
 its own call stack that exists continuously across many loop
 iterations, not just for the duration of one callback. The debugging
@@ -112,7 +112,7 @@ $1 = "kthread_demo_pro\000..."     # TASK_COMM_LEN truncates long names - see it
 ```
 
 This confirms `current` really is this thread's own task, persistently
-— not, as in lab 03/14, whatever happened to be running when some
+— not, as in modules 03/14, whatever happened to be running when some
 generic callback fired. Compare `current->comm`'s truncation against
 the full `"kthread_demo_producer"` string you searched for in `lx-ps`
 a moment ago: `TASK_COMM_LEN` (16 bytes) cuts it short in
@@ -162,7 +162,7 @@ echo stop | tee /sys/kernel/kthreads_demo/control    # actually don't - read on 
 
 Don't run that yet — instead, confirm the thread is genuinely asleep
 right now with `lx-ps` (its state should read `INTERRUPTIBLE`, the
-same state lab 12's blocked reader showed), *then* trigger the stop:
+same state module 12's blocked reader showed), *then* trigger the stop:
 
 ```gdb
 (gdb) lx-ps
@@ -253,9 +253,9 @@ Thread 2 hit Breakpoint N, kthread_demo_read (...) at kthreads.c:154
 (gdb) print start
 ```
 
-Unlike lab 12's `bq_read()`, this never calls anything that sleeps —
+Unlike module 12's `bq_read()`, this never calls anything that sleeps —
 confirm by comparing `lx-ps`'s state for whatever process is running
-`cat` right now against lab 12's blocked reader: this one stays
+`cat` right now against module 12's blocked reader: this one stays
 `RUNNING` the whole time, because "nothing buffered" here just returns
 0 bytes immediately (real EOF-like behavior) rather than waiting for
 more to arrive.
