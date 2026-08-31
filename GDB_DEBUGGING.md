@@ -58,7 +58,21 @@ done
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || /bin/busybox mdev -s
+/bin/busybox mdev -s
 mkdir -p /mnt/labs
+
+# /dev/vda can take a moment to appear - virtio-blk enumeration isn't
+# guaranteed to be done by the time devtmpfs mounts. Without this loop,
+# the very next line fails intermittently with "Can't lookup blockdev"
+# and every insmod after that gets a plain "No such file or directory"
+# with nothing pointing at the real cause - hit for real building this.
+i=0
+while [ ! -b /dev/vda ] && [ $i -lt 20 ]; do
+  sleep 0.2
+  /bin/busybox mdev -s
+  i=$((i+1))
+done
+
 mount -t ext4 /dev/vda /mnt/labs
 echo
 echo "=== VM B (QEMU) ready ==="
@@ -67,6 +81,12 @@ echo "kernel: $(uname -r)"
 echo
 exec /bin/busybox setsid /bin/busybox cttyhack /bin/busybox sh
 ```
+
+If you already built the initramfs before this fix and `insmod` fails
+with `No such file or directory` even though the file is really there
+(check from the host: `sudo mount -o loop labs-disk.img /tmp/x && ls
+/tmp/x/NN_lab_name/ && sudo umount /tmp/x`), this is why — rebuild the
+initramfs with the loop above and reboot the guest.
 
 Package it, and create a small scratch disk you'll copy each lab's
 built `.ko` onto:
@@ -174,6 +194,33 @@ section 6 below. To end a session: `delete` breakpoints in `gdbsess`,
 then `tmux send-keys -t vmb "poweroff -f" Enter` and `tmux kill-session`
 both panes. Rebooting the guest fresh for a new lab is cheap (a few
 seconds) — no need to keep one guest running across unrelated labs.
+
+### Two rules that cause real, confusing-looking failures if missed
+
+Both were hit for real, live, running exactly this walkthrough:
+
+1. **`continue` means "go trigger the next thing in the other pane" —
+   don't keep typing in `gdb`.** Commands typed into `gdb` right after a
+   `continue` just sit in a buffer, unexecuted, until whatever you were
+   supposed to do on the guest side actually happens. If you type ahead
+   (e.g. `break cleanup_module` / `continue` / `bt` / `next` / `finish`
+   all at once without ever switching to the guest pane to run `rmmod`
+   in between), nothing you typed after the first `continue` does
+   anything, and it looks like GDB just stopped responding.
+
+2. **`Ctrl-C` in GDB freezes the entire guest, not just the debugger
+   prompt.** KGDB-style interrupts stop the actual (emulated) CPU. Once
+   you've interrupted, the guest pane will look completely dead — even a
+   bare `Enter` does nothing — until you go back to `gdb` and `continue`
+   again. This is easy to mistake for a broken terminal; it's the guest
+   correctly waiting for you.
+
+If a session ever gets into a confusing state, `info breakpoints` in
+`gdb` and a fresh `capture-pane`-style look at both panes' actual
+scrollback (not just what's visible right now) will show you exactly
+what's pending — a stuck `Continuing.` with no matching hit means
+something on the guest side was never triggered, or the guest itself is
+still frozen from an earlier interrupt.
 
 ## Alternative path: two VMware VMs instead of QEMU
 
