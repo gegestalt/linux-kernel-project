@@ -28,7 +28,7 @@ static int register_cdev_open(struct inode *inode, struct file *file)
 
 	count = atomic_inc_return(&open_count);
 
-	pr_info("open: dev=%u:%u ctx=%s[%d] opens=%d inode=%p file=%p\\n",
+	pr_info("open: dev=%u:%u ctx=%s[%d] opens=%d inode=%p file=%p\n",
 		imajor(inode), iminor(inode), current->comm, current->pid,
 		count, inode, file);
 
@@ -56,10 +56,10 @@ static ssize_t register_cdev_read(struct file *file, char __user *buffer,
 	 * currently executing this read callback.
 	 */
 	message_length = scnprintf(message, sizeof(message),
-				   "register_cdev kernel device\\n"
-				   "major=%d\\n"
-				   "minor=%u\\n"
-				   "context=%s[%d]\\n",
+				   "register_cdev kernel device\n"
+				   "major=%d\n"
+				   "minor=%u\n"
+				   "context=%s[%d]\n",
 				   major, minor, current->comm, current->pid);
 
 	/*
@@ -83,7 +83,7 @@ static ssize_t register_cdev_read(struct file *file, char __user *buffer,
 
 	*offset += bytes_to_copy;
 
-	pr_info("read: dev=%d:%u bytes=%zu offset=%lld ctx=%s[%d]\\n",
+	pr_info("read: dev=%d:%u bytes=%zu offset=%lld ctx=%s[%d]\n",
 		major, minor, bytes_to_copy, (long long)*offset,
 		current->comm, current->pid);
 
@@ -99,7 +99,7 @@ static int register_cdev_release(struct inode *inode, struct file *file)
 
 	count = atomic_dec_return(&open_count);
 
-	pr_info("release: dev=%u:%u ctx=%s[%d] opens=%d file=%p\\n",
+	pr_info("release: dev=%u:%u ctx=%s[%d] opens=%d file=%p\n",
 		imajor(inode), iminor(inode), current->comm, current->pid,
 		count, file);
 
@@ -133,13 +133,13 @@ static int __init register_cdev_init(void)
 
 	major = register_chrdev(0, DEVICE_NAME, &register_cdev_fops);
 	if (major < 0) {
-		pr_err("init: register_chrdev failed err=%d\\n", major);
+		pr_err("init: register_chrdev failed err=%d\n", major);
 		return major;
 	}
 
 	elapsed_ns = ktime_get_ns() - start_ns;
 
-	pr_info("init: major=%d minors=0-255 ctx=%s[%d] time=%llu us\\n",
+	pr_info("init: major=%d minors=0-255 ctx=%s[%d] time=%llu us\n",
 		major, current->comm, current->pid,
 		(unsigned long long)(elapsed_ns / 1000ULL));
 
@@ -147,7 +147,7 @@ static int __init register_cdev_init(void)
 	 * Pointer values may be restricted or hashed by the kernel,
 	 * but they still illustrate that these are distinct objects.
 	 */
-	pr_info("objects: module=%p fops=%p major=%p open_count=%p\\n",
+	pr_info("objects: module=%p fops=%p major=%p open_count=%p\n",
 		THIS_MODULE, &register_cdev_fops, &major, &open_count);
 
 	return 0;
@@ -166,7 +166,7 @@ static void __exit register_cdev_exit(void)
 	start_ns = ktime_get_ns();
 	uptime_ns = start_ns - loaded_at_ns;
 
-	pr_info("exit: major=%d opens=%d ctx=%s[%d] uptime=%llu ms\\n",
+	pr_info("exit: major=%d opens=%d ctx=%s[%d] uptime=%llu ms\n",
 		major, atomic_read(&open_count), current->comm,
 		current->pid,
 		(unsigned long long)(uptime_ns / 1000000ULL));
@@ -175,7 +175,7 @@ static void __exit register_cdev_exit(void)
 
 	elapsed_ns = ktime_get_ns() - start_ns;
 
-	pr_info("exit: unregistered major=%d time=%llu us\\n",
+	pr_info("exit: unregistered major=%d time=%llu us\n",
 		major, (unsigned long long)(elapsed_ns / 1000ULL));
 }
 
