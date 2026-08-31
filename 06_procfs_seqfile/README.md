@@ -156,3 +156,80 @@ and you can watch `stop` still fire to match it). `print *pos` in
 `events_seq_next` is the clearest way to see the iterator's position
 counter advancing one record at a time.
 
+Two more targets, verified first:
+
+```bash
+$ gdb -q -batch -nx -ex "file procfs_seqfile.ko" \
+    -ex "info line info_show" -ex "info line events_write" \
+    -ex "info line record_event" -ex "ptype struct proc_event" procfs_seqfile.ko
+Line 79 of "procfs_seqfile.c" starts at address 0x4e8 <info_show> ...
+Line 171 of "procfs_seqfile.c" starts at address 0x5d0 <events_write> ...
+Line 53 of "procfs_seqfile.c" starts at address 0x364 <events_open+28> ...   # inlined!
+type = struct proc_event {
+    u64 ns;
+    pid_t pid;
+    char comm[16];
+}
+```
+
+`record_event` has no symbol of its own — GCC inlined it entirely into
+`events_open` (the address lands at `events_open+28`, not a standalone
+function). Break on `events_open` instead to watch it happen:
+
+```gdb
+(gdb) break events_open
+(gdb) continue
+```
+```bash
+cat /proc/procfs_demo/events
+```
+```gdb
+(gdb) next        # into the inlined record_event() body - next walks straight through it
+(gdb) print event_count           # about to become one higher
+(gdb) next
+(gdb) print events[event_count - 1]     # the proc_event struct this open() just recorded
+(gdb) print events[event_count - 1].comm   # "cat" - confirmed straight from kernel memory
+(gdb) finish
+```
+
+**`info_show` — the single-value file**, worth contrasting directly
+against the four-callback machinery above: one breakpoint, one
+`seq_printf()`, done.
+
+```gdb
+(gdb) break info_show
+(gdb) continue
+```
+```bash
+cat /proc/procfs_demo/info
+```
+```gdb
+(gdb) print total_opens
+(gdb) print event_count
+(gdb) next
+(gdb) finish
+```
+
+**`events_write` — the `clear` command handler**:
+
+```gdb
+(gdb) break events_write
+(gdb) continue
+```
+```bash
+echo clear | sudo tee /proc/procfs_demo/events
+```
+```gdb
+(gdb) print count               # 6 - "clear\n"
+(gdb) next                       # copy_from_user(), then sysfs_streq(strim(kbuf), "clear")
+(gdb) print kbuf
+(gdb) next
+(gdb) print event_count          # about to be reset to 0
+(gdb) finish
+```
+
+Send anything other than `clear` and re-break here — `print kbuf` shows
+your actual text, and stepping past the `sysfs_streq()` check lands on
+`return -EINVAL;` instead of the reset, matching the "invalid writes are
+rejected" behavior from this lab's own "Load and test" section.
+
