@@ -14,7 +14,7 @@ support, and non-blocking (`O_NONBLOCK`) reads.
   /dev/blocking_demo` respond instantly to Ctrl-C instead of being stuck
   in an unkillable wait.
 - **A producer waking the wait queue** — a `struct timer_list` (the
-  simplest possible producer; see lab [14](../14_timers_workqueues/) for
+  simplest possible producer; see module [14](../14_timers_workqueues/) for
   timers on their own) fires periodically, flips a "data ready" flag, and
   calls `wake_up_interruptible(&wq)`. This is the same shape as a real
   interrupt handler waking a driver's read-side wait queue once new data
@@ -26,7 +26,7 @@ support, and non-blocking (`O_NONBLOCK`) reads.
   indivisible step, so exactly one waiting reader consumes each produced
   event.
 - **`O_NONBLOCK`** — checked via `file->f_flags`, the same field decoded in
-  lab [08](../08_open_release_cdev/). With it set, `read()` returns
+  module [08](../08_open_release_cdev/). With it set, `read()` returns
   `-EAGAIN` immediately instead of blocking when there's nothing ready —
   the flag a caller sets at `open()` time to opt out of blocking
   semantics entirely.
@@ -151,7 +151,7 @@ make clean
   /sys/module/wait_queues_blocking/parameters/interval_ms`) and watch a
   backgrounded `while true; do cat /dev/blocking_demo; done` speed up
   immediately — the timer re-reads `interval_ms` fresh on every
-  reschedule, the same "no store callback needed" behavior lab
+  reschedule, the same "no store callback needed" behavior module
   [04](../04_module_params/) covers for a `0644` parameter.
 - Start a blocking `cat /dev/blocking_demo` in one terminal, then hit
   Ctrl-C. It returns instantly, unlike a process stuck in uninterruptible
@@ -167,13 +167,13 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
 Setup: [`../gdb_debugging.md`](../gdb_debugging.md). Break on both sides
-of the producer/consumer pair to see the context difference this lab is
-built around, directly rather than inferred from the `comm=`/`in_*=`
+of the producer/consumer pair to see the context difference this module
+is built around, directly rather than inferred from the `comm=`/`in_*=`
 fields the driver itself logs:
 
 ```gdb
@@ -201,7 +201,7 @@ syscall chain (`ksys_read` → `vfs_read` → `bq_read`). Step through the
 `atomic_xchg(&data_ready, 0)` line with `next` and `print` its return
 value before deciding whether the loop `break`s out or calls
 `wait_event_interruptible()` — the exact check-and-clear moment the
-thundering-herd fix in this lab's README depends on.
+thundering-herd fix in this module's README depends on.
 
 **`bq_poll`/`trigger_store`/init/exit**, verified:
 
@@ -217,7 +217,7 @@ Line 222 ... <wait_queues_blocking_exit> ...
 ```
 
 `break bq_poll`, then drive a `select()`/`poll()` from a Python
-one-liner against `/dev/blocking_demo` (this lab's own README has one)
+one-liner against `/dev/blocking_demo` (this module's own README has one)
 — `next` through `poll_wait()` and watch `atomic_read(&data_ready)`
 decide the return value, the exact mechanism that makes `select()`
 return "readable" at the right moment without the caller ever calling
@@ -225,7 +225,7 @@ return "readable" at the right moment without the caller ever calling
 
 `break wait_queues_blocking_exit`, `rmmod`, and step through in order:
 `timer_shutdown_sync(&producer_timer)` first, *then* the defensive
-`wake_up_interruptible_all()` this lab's own source comments explain is
+`wake_up_interruptible_all()` this module's own source comments explain is
 mostly unreachable in practice (module refcounting via `fops.owner`
 already prevents `rmmod` while a reader is blocked) — `print
 $lx_current()->comm` here will always read `rmmod`, never a reader,

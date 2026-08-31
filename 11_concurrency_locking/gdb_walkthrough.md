@@ -27,8 +27,8 @@ sudo umount /tmp/vmb-mnt
 ```
 
 `stress_test` (the userspace pthread hammering tool) is only needed
-for reproducing the race under real load *outside* GDB — see the
-lab's own [readme.md](readme.md) for that. This walkthrough uses a
+for reproducing the race under real load *outside* GDB — see this
+module's own [readme.md](readme.md) for that. This walkthrough uses a
 single manual `echo` per breakpoint hit instead, since a live GDB
 session and a multi-threaded stress test fighting over the same lock
 at the same time would be nearly impossible to reason about together.
@@ -56,7 +56,7 @@ Line ... of "concurrency_locking.c" starts at address 0x... <race_write+NN> ...
 ```
 
 It resolves *inside* `race_write`, confirming GCC inlined it entirely
-— the same pattern as lab 13's `do_allocate()` and lab 07's
+— the same pattern as module 13's `do_allocate()` and module 07's
 `printk_emit_all_levels()`. `break race_write` and `next`-step through
 its body; there is no separate call to descend into.
 
@@ -209,7 +209,7 @@ safe only from process context — never from an interrupt handler —
 because a `mutex_lock()` that has to wait genuinely reschedules this
 task off the CPU rather than busy-spinning. `write()` always runs in
 ordinary process context, which is why this driver is allowed to use
-it here at all; lab 14's timer callback runs from softirq context and
+it here at all; module 14's timer callback runs from softirq context and
 could not legally take this same kind of lock.
 
 ### Step 5 — `MODE_ATOMIC`, and why "no lock" still isn't a race here

@@ -13,14 +13,14 @@ race fails the test almost every single run."
   writes `local + 1` back. Two threads doing this concurrently can both
   read the same starting value and both write back the same `+1` result,
   silently losing one of the two increments. This is *the* canonical
-  concurrency bug, and this lab makes it happen on purpose, reliably,
+  concurrency bug, and this module makes it happen on purpose, reliably,
   instead of waiting for it to happen to you by accident in a driver
   you're trying to ship.
 - **`spinlock_t`** (`spin_lock()`/`spin_unlock()`) — busy-waits rather than
   sleeping. Cheap for short critical sections; only safe where the holder
   never sleeps while holding it (and, in the general case, never valid to
   take from a context where sleeping is already forbidden without the
-  `_irqsave` variant — this lab's critical section is short enough not to
+  `_irqsave` variant — this module's critical section is short enough not to
   need that here, but see [14](../14_timers_workqueues/) for contexts
   where it would).
 - **`struct mutex`** (`mutex_lock()`/`mutex_unlock()`) — may sleep if
@@ -137,12 +137,12 @@ make clean            # also removes the stress_test binary
 - Read `Documentation/locking/locktypes.rst` in `../../linux_mainline` for
   the real rules on which lock types are legal in which contexts
   (interrupt handlers, softirqs, `PREEMPT_RT` kernels change some of
-  this) — this lab only exercises the simplest, always-safe case:
+  this) — this module only exercises the simplest, always-safe case:
   process-context code taking its own lock around its own data.
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 

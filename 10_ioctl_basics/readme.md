@@ -113,7 +113,7 @@ make clean            # also removes the ioctl_test binary
   `ioctl_test` binary against the *new* `.ko`. The encoded size is now a
   mismatch between the two sides — read `_IOC_SIZE()` checks (or their
   absence) in real drivers to see how some validate this and some don't;
-  this lab's driver does not validate it, trusting the shared header
+  this module's driver does not validate it, trusting the shared header
   instead, which is exactly the failure mode you're now reproducing.
 - Add a fifth command, `IOCTL_BASICS_GET_MODE` (`_IOR`, returning just the
   current `__u32 mode`), end to end: header, `case` in the kernel switch,
@@ -122,7 +122,7 @@ make clean            # also removes the ioctl_test binary
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this lab — tmux
+For a full, self-contained, step-by-step session for this module — tmux
 pane layout, every command, every output explained — see
 [`gdb_walkthrough.md`](gdb_walkthrough.md).
 
@@ -138,7 +138,7 @@ sudo ./ioctl_test /dev/ioctl_basics0
 ```
 ```gdb
 (gdb) print cmd                # the raw encoded command number
-(gdb) print/x cmd               # compare against the _IOC() breakdown in this lab's README
+(gdb) print/x cmd               # compare against the _IOC() breakdown in this module's README
 (gdb) next                      # step into the matching case
 ```
 
@@ -204,7 +204,7 @@ shows precisely what `ioctl_test` is about to receive, before
 sudo rmmod ioctl_basics
 ```
 ```gdb
-(gdb) print stats.resets    # matches this lab's own dmesg exit line exactly
+(gdb) print stats.resets    # matches this module's own dmesg exit line exactly
 (gdb) print stats.echoes
 (gdb) finish
 ```

@@ -17,7 +17,7 @@ make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 modinfo ioctl_basics.ko | grep vermagic
 ```
 
-This lab also needs a userspace test program cross-built for the
+This module also needs a userspace test program cross-built for the
 guest's architecture (aarch64) and copied on alongside the module:
 
 ```bash

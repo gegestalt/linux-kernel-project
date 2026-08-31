@@ -6,7 +6,7 @@ instead of a major number you `mknod` by hand.
 
 ## What this demonstrates
 
-- The modern four-step device setup, in place of labs 05/08's
+- The modern four-step device setup, in place of modules 05/08's
   `register_chrdev()`:
   1. `alloc_chrdev_region()` — reserve a `(major, minor..minor+count)` range.
   2. `cdev_init()` + `cdev_add()` — bind a `struct cdev` (and its
@@ -30,9 +30,9 @@ instead of a major number you `mknod` by hand.
 - `fixed_size_llseek()` — a generic helper (not something this driver
   hand-rolls) that implements `SEEK_SET`/`SEEK_CUR`/`SEEK_END` correctly
   against a known fixed capacity, the same "borrow generic glue" pattern as
-  lab [06](../06_procfs_seqfile/)'s `seq_read()`/`seq_lseek()`.
+  module [06](../06_procfs_seqfile/)'s `seq_read()`/`seq_lseek()`.
 - `kzalloc(BUF_SIZE, GFP_KERNEL)` for the backing store, freed on every
-  error path in `init()` and again in `exit()` — see lab
+  error path in `init()` and again in `exit()` — see module
   [13](../13_kernel_memory/) for allocator choices in more depth.
 
 ## Files
@@ -124,8 +124,8 @@ make clean
   fresh `open()` starts `*ppos` at `0` again, so both reads return the
   full content, unlike a single long-lived fd where a second `read()`
   would return `0` (EOF) immediately.
-- Compare this driver's `read()`/`write()` bound-checking against lab
-  [05](../05_register_cdev/)'s, which has no `write()` at all, and lab
+- Compare this driver's `read()`/`write()` bound-checking against module
+  [05](../05_register_cdev/)'s, which has no `write()` at all, and module
   [03](../03_gpio_sim/)'s `gpioctrl_write()`, which parses a small command
   language instead of storing raw bytes. Three different answers to "what
   should `write()` even mean for this device," each appropriate to what
@@ -159,7 +159,7 @@ echo -n "hello" | sudo tee /dev/read_write_cdev0
 
 To see the short-write path specifically, break here, then from the
 guest push more than `BUF_SIZE` bytes at once (the big Python write in
-this lab's "Load and test" section) and `print to_copy` vs `print
+this module's "Load and test" section) and `print to_copy` vs `print
 count` at the point `to_copy` gets clamped by `space` — the exact moment
 this driver decides to return less than what was asked for.
 
@@ -198,8 +198,8 @@ sudo cat /dev/read_write_cdev0
 
 **`read_write_cdev_init` — the four-step modern registration sequence**
 (`alloc_chrdev_region` → `cdev_init`/`cdev_add` → `class_create` →
-`device_create`), each with its own error path — the same shape as lab
-03's `gpioctrl_init`, worth stepping through the same way:
+`device_create`), each with its own error path — the same shape as
+module 03's `gpioctrl_init`, worth stepping through the same way:
 
 ```gdb
 (gdb) break do_init_module
@@ -228,5 +228,5 @@ sudo insmod ./read_write_cdev.ko
 `fixed_size_llseek()` helper — `step` (not `next`) into it from a
 breakpoint here to actually watch the kernel's own generic
 `SEEK_SET`/`SEEK_CUR`/`SEEK_END` bounds-checking logic run, the same
-"borrow generic glue" pattern as lab 06's `seq_read()`/`seq_lseek()`.
+"borrow generic glue" pattern as module 06's `seq_read()`/`seq_lseek()`.
 

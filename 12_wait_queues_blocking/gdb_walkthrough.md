@@ -3,14 +3,14 @@
 `wait_queues_blocking.c` pairs a kernel timer (softirq context,
 producing an "event" every `interval_ms`) with a blocking `read()`
 (`wait_event_interruptible()`) and a `poll()` callback. This is the
-first lab whose central object is a **task that isn't running** — a
+first module whose central object is a **task that isn't running** — a
 reader blocked in `bq_read()` has voluntarily taken itself off the CPU
 entirely, parked on `event_wq` until something wakes it. KGDB's
 break-in freezes every CPU regardless of what's running on it, which
 means it can catch a *sleeping* task exactly as easily as a running
 one — this walkthrough is built around seeing what that actually looks
 like from inside GDB, since it looks different from every earlier
-lab's breakpoint hits.
+module's breakpoint hits.
 
 ## Environment
 
@@ -62,7 +62,7 @@ insmod /mnt/labs/12_wait_queues_blocking/wait_queues_blocking.ko interval_ms=150
 ```
 
 Don't touch `vmb` — `producer_fn` fires on its own, every
-`interval_ms`, exactly like lab 03's workqueue and lab 14's timer:
+`interval_ms`, exactly like module 03's workqueue and module 14's timer:
 
 ```gdb
 Thread 2 hit Breakpoint N, producer_fn (t=0x...) at wait_queues_blocking.c:50
@@ -138,7 +138,7 @@ instruction sequence (see `arch/arm64/include/asm/alternative-macros.h`),
 and a `next` from the function's opening line can land you *inside that
 header* for a step before returning to `wait_queues_blocking.c` — the
 same "next moves in the compiled sense, not the textual one" lesson
-from lab 01, just a different concrete shape. Watch the line GDB
+from module 01, just a different concrete shape. Watch the line GDB
 actually shows you after each `next` rather than counting how many
 you've typed:
 
@@ -153,7 +153,7 @@ you've typed:
 
 ### Step 2 — catch a task actually blocked on the wait queue
 
-This is the step this lab exists for. Delete the timer breakpoint (you
+This is the step this module exists for. Delete the timer breakpoint (you
 don't want it firing repeatedly while you set this up), and this time
 break where a *reader* actually goes to sleep:
 
@@ -164,7 +164,7 @@ break where a *reader* actually goes to sleep:
 ```
 
 (`delete` with no arguments deletes *everything*, but asks a `(y or n)`
-confirmation first — worth avoiding here too, same reasoning as lab
+confirmation first — worth avoiding here too, same reasoning as module
 01's cleanup section: name the number.)
 
 ```bash
@@ -266,7 +266,7 @@ further — `lx-ps` shows every task's state field:
 Find the `cat` process in the listing — its state should read
 something like `INTERRUPTIBLE` (kernel `TASK_INTERRUPTIBLE`), not
 `RUNNING`. Compare this against `producer_fn`'s task in step 1, or
-against `insmod`/`rmmod` in any earlier lab — those were always
+against `insmod`/`rmmod` in any earlier module — those were always
 `RUNNING` (or briefly preempted, but never voluntarily parked) at the
 moment you caught them, because a syscall's own callback code was
 still actively executing. This `cat` is different: it has explicitly
@@ -286,9 +286,9 @@ echo 1 | tee /sys/class/misc/blocking_demo/trigger
 
 (`bq_attr_group` is attached to `bq_miscdev.this_device->kobj` in the
 source — the misc device's own kobject — which is why this lives under
-`/sys/class/misc/blocking_demo/`, the same location pattern lab 11's
+`/sys/class/misc/blocking_demo/`, the same location pattern module 11's
 `/sys/class/misc/race_demo/mode` uses, rather than under
-`/sys/kernel/...` the way labs 13–16's bare-kobject drivers do.)
+`/sys/kernel/...` the way modules 13–16's bare-kobject drivers do.)
 
 **Don't type anything new into the `gdbsess` pane for this step — just
 look at it.** The `next` you issued at the end of step 2 (on the
@@ -361,9 +361,9 @@ which is precisely why this callback has to be non-blocking itself.
 ## Cleanup
 
 **`break wait_queues_blocking_exit` does not work here — confirmed
-live, and worth understanding why, because it affects every lab whose
-cleanup function uses the modern `module_exit()` macro (i.e. every lab
-in this repo except 01).** `wait_queues_blocking_exit` is marked
+live, and worth understanding why, because it affects every module whose
+cleanup function uses the modern `module_exit()` macro (i.e. every
+module in this repo except 01).** `wait_queues_blocking_exit` is marked
 `__exit`, which places it in its own ELF section, `.exit.text`,
 separate from the module's regular `.text`. `lx-symbols` relocates only
 a fixed, hardcoded list of extra sections when it maps a loaded
@@ -484,7 +484,7 @@ rmmod wait_queues_blocking
 This hits cleanly, with a real name — live-tested, it reported as
 `cleanup_module` rather than `wait_queues_blocking_exit`: the
 `module_exit()` macro aliases the function to the legacy `cleanup_module`
-symbol name too, the exact same mechanism lab 01/02 already cover for
+symbol name too, the exact same mechanism modules 01/02 already cover for
 `init_module`.
 
 ```gdb
@@ -542,5 +542,5 @@ from a breakpoint set *before* the block can carry you across a real
 sleep/wake cycle spanning wall-clock time and a completely separate
 trigger, landing back in the same function with the same local
 variables it had before, resumed rather than restarted. Contrast this
-against every synchronous callback in labs 01–11: those never left the
+against every synchronous callback in modules 01–11: those never left the
 CPU at all between entry and return.

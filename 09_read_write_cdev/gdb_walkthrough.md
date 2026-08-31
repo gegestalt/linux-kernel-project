@@ -3,12 +3,12 @@
 `read_write_cdev.c` is the modern char-device registration sequence —
 `alloc_chrdev_region()` + `cdev_init()`/`cdev_add()` +
 `class_create()` + `device_create()` — four separate calls in place of
-lab 05's single `register_chrdev()`, with the payoff that `udev`
+module 05's single `register_chrdev()`, with the payoff that `udev`
 creates `/dev/read_write_cdev0` automatically. The debugging focus is
 the read/write buffer itself: a fixed 4096-byte in-kernel buffer with
 two independently-tracked sizes (`data_len`, how much has actually been
 written; `BUF_SIZE`, how much exists at all) and a real seekable
-position — the first lab where `read()`/`write()` genuinely interact
+position — the first module where `read()`/`write()` genuinely interact
 with each other's effects on the same underlying storage.
 
 ## Environment
@@ -209,6 +209,6 @@ the "fits fine" and "buffer is full" branches with real writes shows
 exactly which condition trips which return path, down to the specific
 negative `errno` value the function actually returns. `rw_cdev.ops`
 resolving back to the symbol `rw_fops` is the same kind of direct proof
-lab 08 got from `filp->private_data`: GDB reading a live pointer and
+module 08 got from `filp->private_data`: GDB reading a live pointer and
 recognizing what it points to beats reading the `cdev_init()` call and
 assuming it worked.
