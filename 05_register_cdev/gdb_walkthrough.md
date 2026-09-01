@@ -37,7 +37,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal.*
 
 ```bash
-cd 05_register_cdev
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/05_register_cdev
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

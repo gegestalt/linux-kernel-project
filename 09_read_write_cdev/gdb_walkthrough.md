@@ -38,7 +38,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 09_read_write_cdev
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/09_read_write_cdev
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

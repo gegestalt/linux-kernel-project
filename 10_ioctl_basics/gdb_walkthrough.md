@@ -36,7 +36,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 10_ioctl_basics
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/10_ioctl_basics
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

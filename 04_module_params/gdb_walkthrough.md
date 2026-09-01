@@ -38,7 +38,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal.*
 
 ```bash
-cd 04_module_params
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/04_module_params
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 
