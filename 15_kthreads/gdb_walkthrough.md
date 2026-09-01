@@ -40,7 +40,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 15_kthreads
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/15_kthreads
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

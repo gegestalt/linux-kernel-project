@@ -37,7 +37,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal.*
 
 ```bash
-cd 03_gpio_sim
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/03_gpio_sim
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

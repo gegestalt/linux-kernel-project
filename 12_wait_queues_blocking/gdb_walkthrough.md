@@ -40,7 +40,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 12_wait_queues_blocking
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/12_wait_queues_blocking
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 ```bash
