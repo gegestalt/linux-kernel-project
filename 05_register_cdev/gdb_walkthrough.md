@@ -134,15 +134,69 @@ insmod /mnt/labs/05_register_cdev/register_cdev.ko
 ```
 lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 ```
+
+**`break register_cdev_init` does not work here — confirmed live (this
+exact mechanism, on two other modules), don't trust it.**
+`register_cdev_init` is `__init`, placed in `.init.text`. `lx-symbols`
+relocates only a fixed, hardcoded list of sections
+(`scripts/gdb/linux/symbols.py`'s `_section_arguments()`: `.data`,
+`.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`, `.text.unlikely`)
+— `.init.text` isn't one of them, the same root cause as step 12's
+`.exit.text` problem below, just hitting the *load* path instead.
+`break register_cdev_init` right now would be accepted with no error
+and silently resolve to a tiny, bogus, unrelocated file offset — it
+would never actually fire; `insmod` would run straight through with
+nothing caught.
+
+The fix mirrors step 12's exit-path fix exactly, using `mod->init`
+instead of `mod->exit` — you're still stopped inside `do_init_module`
+right now (step 6), before `do_one_initcall(mod->init)` has run, so
+`mod->init` is already the module's real, live init-function address:
+
+```
+print mod->init
+```
+```
+$1 = (int (*)(void)) 0x...
+```
+
+(That address is from one real run — module memory is placed fresh each
+boot even with `nokaslr`. Use whatever `print mod->init` gives you
+next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/05_register_cdev/register_cdev.ko -s .init.text 0x...
+```
+```
+y
+```
 ```
 break register_cdev_init
+```
+```
+Breakpoint N at 0x...: register_cdev_init. (2 locations)
+```
+
+Two locations — `N.1` is the old broken raw-offset one, `N.2` is the
+newly-relocated real one:
+
+```
+disable N.1
 ```
 ```
 continue
 ```
 ```
-Thread 2 hit Breakpoint N, register_cdev_init () at register_cdev.c:127
+Thread 2 hit Breakpoint N.2, 0x... in init_module ()
 ```
+
+Reports as `init_module`, not `register_cdev_init` — the same alias
+mechanics documented in module 02's walkthrough (`module_init()`
+generates a hard alias to the legacy name). `add-symbol-file` here only
+supplies a symbol address, not full compiler-generated debug info, so
+this exact landing point has no source line attached — that clears up
+immediately once you step forward:
+
 ```
 next
 ```
@@ -150,7 +204,7 @@ next
 print major
 ```
 ```
-$1 = 240
+$2 = 240
 ```
 
 **What this shows:** the `0` passed as `register_chrdev()`'s first
@@ -200,7 +254,7 @@ Thread 2 hit Breakpoint N, register_cdev_open (inode=0x..., file=0x...) at regis
 print inode->i_rdev
 ```
 ```
-$2 = 61440
+$3 = 61440
 ```
 
 (`imajor()`/`iminor()` are ordinary inline functions — don't try `print
@@ -212,7 +266,7 @@ inlines read, works fine.)
 print current->comm
 ```
 ```
-$3 = "cat\000\000\000\000\000\000\000\000\000\000\000\000"
+$4 = "cat\000\000\000\000\000\000\000\000\000\000\000\000"
 ```
 ```
 print current->pid
@@ -258,7 +312,7 @@ next
 print count
 ```
 ```
-$4 = 2
+$5 = 2
 ```
 
 `atomic_inc_return()` is what makes this number trustworthy even if two
@@ -288,7 +342,7 @@ next
 print message
 ```
 ```
-$5 = "register_cdev kernel device\nmajor=240\nminor=0\ncontext=cat[123]\n"
+$6 = "register_cdev kernel device\nmajor=240\nminor=0\ncontext=cat[123]\n"
 ```
 ```
 print &message
@@ -357,7 +411,7 @@ advance kernel/module/main.c:863
 print mod->exit
 ```
 ```
-$6 = (void (*)(void)) 0xffff80007c32b4d0
+$7 = (void (*)(void)) 0xffff80007c32b4d0
 ```
 
 (That address is from one real run — module memory placement is random
@@ -405,7 +459,7 @@ next
 print open_count
 ```
 ```
-$7 = {counter = 0}
+$8 = {counter = 0}
 ```
 
 Both backgrounded `cat`s should have already exited (EOF closes their

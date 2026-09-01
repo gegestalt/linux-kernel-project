@@ -64,9 +64,11 @@ kernel/module/main.c:3117:            ret = do_one_initcall(mod->init);
 ```
 
 Same call path as module 01. What's different here is purely a *naming*
-fact: `break my_init` resolves to a real, independent symbol only in this
-module, because this module's alias leaves the original name in the
-symbol table.
+fact: `my_init` is a real, independent symbol only in this module,
+because this module's alias leaves the original name in the symbol
+table — module 01 never had any name but `init_module` at all.
+(Symbol-table presence is not the same as a *working* breakpoint, though
+— step 9 covers a real gotcha in actually breaking on it.)
 
 ## Step 3 — verify the source lines this module will stop on
 
@@ -162,19 +164,67 @@ lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 loading @0x...: .../02_better_hello/better_hello.ko
 ```
 
-Now break on `my_init` directly — the local alias's own name, not
-`init_module`:
+**`break my_init` does not work right after `lx-symbols` — confirmed
+live, don't trust it.** `my_init` is `__init`, placed in `.init.text`.
+`lx-symbols` relocates only a fixed, hardcoded list of sections
+(`scripts/gdb/linux/symbols.py`'s `_section_arguments()`: `.data`,
+`.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`, `.text.unlikely`)
+— `.init.text` isn't one of them, the same root cause as step 11's
+`.exit.text` problem below, just hitting the *load* path this time:
 
 ```
 break my_init
 ```
 ```
+Breakpoint 2 at 0x20: file better_hello.c, line 10.
+```
+
+`0x20` is a **raw, unrelocated file offset**, not a real kernel address
+— accepted with no error, would never actually fire. You're still
+stopped inside `do_init_module`, before `do_one_initcall(mod->init)` has
+run, so `mod->init` is already the module's real, live init-function
+address — same fix as step 11's `mod->exit`, using `mod->init` instead:
+
+```
+print mod->init
+```
+```
+$2 = (int (*)(void)) 0xffff80007c32e030
+```
+
+(That address is from one real, live-verified run — yours will differ.
+Use whatever `print mod->init` gives you next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/02_better_hello/better_hello.ko -s .init.text 0xffff80007c32e030
+```
+```
+y
+```
+```
+break my_init
+```
+```
+Breakpoint 3 at 0x20: my_init. (2 locations)
+```
+
+Two locations — `3.1` is the same old broken raw offset (`0x20`,
+matching what plain `break my_init` gave a moment ago), `3.2` is the
+newly-relocated real one:
+
+```
+disable 3.1
+```
+```
 continue
 ```
 ```
-Thread 2 hit Breakpoint 2, my_init () at better_hello.c:9
-9           printk(KERN_INFO "Hello luv .\n");
+Thread 2 hit Breakpoint 3.2, 0xffff80007c32e03c in init_module ()
 ```
+
+Reports as `init_module`, not `my_init` — same alias mechanics as step
+2: both names point at the identical address, GDB just picked one label
+for this PC.
 
 ## Step 10 — confirm the frame shape matches module 01
 
@@ -182,27 +232,45 @@ Thread 2 hit Breakpoint 2, my_init () at better_hello.c:9
 bt
 ```
 ```
-#0  my_init () at better_hello.c:9
-#1  0x... in do_one_initcall (fn=0x... <init_module>) at init/main.c:...
+#0  0xffff80007c32603c in init_module ()
+#1  0xffff800080036eb0 [PAC] in do_one_initcall (fn=0xffff80007c326030) at init/main.c:1353
 #2  0x... in do_init_module (mod=0x...) at kernel/module/main.c:...
 ...
 ```
 
 Same shape as module 01 — `do_one_initcall()` calls `mod->init` for
-*every* module regardless of which macro it used. Worth noticing: frame
-`#1`'s `fn=` prints as `<init_module>` even though you broke on
-`my_init` and frame `#0` shows `my_init` — both names point at the
-identical address (step 2), GDB just picked one label. `print/x $pc` and
-`info symbol $pc` in frame 0 would show both names resolving to the same
-value if you want to check.
+*every* module regardless of which macro it used. Two things worth being
+precise about here rather than assuming, both confirmed live: frame `#0`
+shows `init_module`, not `my_init` — the manual `add-symbol-file -s
+.init.text` from step 9 only injects a symbol *address*, not full
+compiler-generated debug info for that address, so GDB falls back to
+whichever alias name it already knew about (`init_module`), and doesn't
+attach a source line either. Frame `#1`'s `fn=` shows the bare address
+(`0xffff80007c326030`, matching step 9's `print mod->init` exactly, once
+you allow for a fresh boot's different placement), not a symbolic
+`<init_module>` — same underlying reason. `print/x $pc` and `info symbol
+$pc` in frame 0 would still show both names resolving to the same
+address if you want to check that part directly.
 
 ```
 finish
 ```
 ```
-Run till exit from #0  my_init () at better_hello.c:9
-Value returned is $2 = 0
+Run till exit from #0  0xffff80007c32603c in init_module ()
+0xffff800080036eb0 in do_one_initcall (fn=0xffff80007c326030) at init/main.c:1353
+1353		ret = fn();
 ```
+
+**No `Value returned is ...` line this time** — confirmed live, not an
+oversight in this doc. `finish` prints a return value only when GDB
+knows the current frame's function *type* from debug info; the manual
+`.init.text` symbol from step 9 supplies an address, not a recompiled
+type, so GDB has nothing to decode the return register against here.
+`my_init`'s source has exactly one `return` statement (`return 0;`,
+`better_hello.c:16`) and the module goes on to load successfully in step
+14, so the value is not in doubt — `finish` here just can't *display* it
+the way step 11's exit-path `finish` can, because that one lands inside
+a fully-resolved vmlinux function instead.
 
 ## Step 11 — the exit path: where it actually differs from module 01
 
@@ -326,11 +394,20 @@ quit
   is direct proof, and the identical `do_one_initcall()` → `mod->init`
   call path (step 10) shows the runtime behavior really is the same as
   module 01's.
-- `break my_init` works by the name in your own source, instead of
-  every module in the world sharing the one generic `init_module` name
-  module 01 used — the one real payoff of the macro.
-- `__exit`-annotated functions live in `.exit.text`, which `lx-symbols`
-  never relocates — `break my_exit` silently resolves to a bogus raw
-  file offset unless you manually `add-symbol-file` it against
-  `mod->exit`'s real, live address first (step 11). Every module from
-  here on hits this the same way.
+- `my_init`/`my_exit` are real, independent symbols in your own source
+  — the one payoff of the macro — but **neither one is `break`-able
+  right after `lx-symbols` alone.** `__init` puts `my_init` in
+  `.init.text`, `__exit` puts `my_exit` in `.exit.text`; `lx-symbols`
+  relocates neither section, so both breakpoints silently resolve to a
+  bogus raw file offset (steps 9 and 11, confirmed live for both — not
+  just assumed from one and generalized to the other). The fix is
+  identical either way: read the real address straight out of the
+  kernel's own data (`mod->init` before `do_one_initcall`, `mod->exit`
+  right before `mod->exit()` runs), then `add-symbol-file ... -s
+  <section> <addr>` against it.
+- Once you're stopped via that manually-added symbol, GDB shows the
+  `init_module`/`cleanup_module` alias name instead of `my_init`/
+  `my_exit`, drops the source-line annotation, and `finish` stops
+  printing a return value — all confirmed live (step 10) — because
+  `add-symbol-file` supplies an address, not a recompiled type. Every
+  module from here on hits both of these the same way.

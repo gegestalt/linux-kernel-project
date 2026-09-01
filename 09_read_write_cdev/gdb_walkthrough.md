@@ -136,16 +136,73 @@ lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 
 ## Step 7 — init: watch the four-step registration sequence itself
 
+**`break read_write_cdev_init` does not work here — confirmed live,
+don't trust it.** `read_write_cdev_init` is `__init`, placed in
+`.init.text`. `lx-symbols` relocates only a fixed, hardcoded list of
+sections (`scripts/gdb/linux/symbols.py`'s `_section_arguments()`:
+`.data`, `.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`,
+`.text.unlikely`) — `.init.text` isn't one of them, the same root cause
+documented for `.exit.text` on the unload path in most other modules'
+walkthroughs, just hitting the *load* path this time:
+
 ```
 break read_write_cdev_init
 ```
 ```
-continue
+Breakpoint 2 at <a tiny, bogus, unrelocated file offset>: file read_write_cdev.c, line 166.
 ```
 
+That address is **not** a real kernel address — accepted with no error,
+would never actually fire; `insmod` would run straight through with
+nothing caught. You're still stopped inside `do_init_module`, before
+`do_one_initcall(mod->init)` has run, so `mod->init` is already the
+module's real, live init-function address:
+
 ```
-Thread 2 hit Breakpoint N, read_write_cdev_init () at read_write_cdev.c:166
+print mod->init
 ```
+```
+$1 = (int (*)(void)) 0x...
+```
+
+(That address is from one real, live-verified run of this fix —
+yours will differ. Use whatever `print mod->init` gives you next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/09_read_write_cdev/read_write_cdev.ko -s .init.text 0x...
+```
+```
+y
+```
+```
+break read_write_cdev_init
+```
+```
+Breakpoint 3 at <same offset as before>: read_write_cdev_init. (2 locations)
+```
+
+Two locations — `3.1` is the same old broken raw offset (matching what
+plain `break read_write_cdev_init` gave a moment ago), `3.2` is the
+newly-relocated real one:
+
+```
+disable 3.1
+```
+```
+continue
+```
+```
+Thread 2 hit Breakpoint 3.2, 0x... in init_module ()
+```
+
+Reports as `init_module`, not `read_write_cdev_init` — `module_init()`
+aliases the function you named to the legacy `init_module` symbol too;
+both names point at the identical address, GDB just picked one label
+for this PC. No source line shown here either — the manual
+`add-symbol-file -s .init.text` supplies an address, not full debug
+info, so GDB can't attach one. From here on, ordinary source-level
+stepping (`next`, `print <local>`) works normally, same as any other
+breakpoint:
 ```
 next
 ```
@@ -153,7 +210,7 @@ next
 print buffer
 ```
 ```
-$1 = (char *) 0xffff... ""
+$2 = (char *) 0xffff... ""
 ```
 ```
 next
@@ -176,7 +233,7 @@ next
 print rw_cdev.ops
 ```
 ```
-$2 = (const struct file_operations *) 0x... <rw_fops>
+$5 = (const struct file_operations *) 0x... <rw_fops>
 ```
 
 `rw_cdev.ops` pointing directly at the file-scope `rw_fops` symbol (not
@@ -229,13 +286,13 @@ Thread 2 hit Breakpoint N, rw_write (...) at read_write_cdev.c:107
 print count
 ```
 ```
-$3 = 9
+$7 = 9
 ```
 ```
 print data_len
 ```
 ```
-$4 = 0
+$8 = 0
 ```
 ```
 next
@@ -250,7 +307,7 @@ next
 print space
 ```
 ```
-$5 = 4096
+$9 = 4096
 ```
 ```
 next
@@ -259,7 +316,7 @@ next
 print to_copy
 ```
 ```
-$6 = 9
+$10 = 9
 ```
 ```
 next
@@ -274,7 +331,7 @@ next
 print data_len
 ```
 ```
-$7 = 9
+$11 = 9
 ```
 
 ## Step 9 — the short-write case: prove the buffer's ceiling is real
@@ -310,7 +367,7 @@ Thread 2 hit Breakpoint N, rw_write (...) at read_write_cdev.c:107
 print count
 ```
 ```
-$8 = 4096
+$12 = 4096
 ```
 ```
 continue
@@ -331,7 +388,7 @@ Thread 2 hit Breakpoint N, rw_write (...) at read_write_cdev.c:107
 print *ppos
 ```
 ```
-$9 = 4096
+$13 = 4096
 ```
 ```
 next
@@ -340,7 +397,7 @@ next
 finish
 ```
 ```
-Value returned is $10 = -28
+Value returned is $14 = -28
 ```
 
 `-28` is `-ENOSPC` (`errno.h`'s value 28 for `ENOSPC`, negated per

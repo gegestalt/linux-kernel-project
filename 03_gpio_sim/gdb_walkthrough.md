@@ -201,15 +201,73 @@ insmod /mnt/labs/03_gpio_sim/gpioctrl.ko
 ```
 lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 ```
+
+**`break gpioctrl_init` does not work here — confirmed live (this exact
+mechanism, on two other modules), don't trust it.** `gpioctrl_init` is
+`__init`, placed in `.init.text`. `lx-symbols` relocates only a fixed,
+hardcoded list of sections (`scripts/gdb/linux/symbols.py`'s
+`_section_arguments()`: `.data`, `.data..read_mostly`, `.rodata`,
+`.bss`, `.text.hot`, `.text.unlikely`) — `.init.text` isn't one of them,
+the same root cause as step 16's `.exit.text` problem below, just
+hitting the *load* path instead. `break gpioctrl_init` right now would
+be accepted with no error and silently resolve to a tiny, bogus,
+unrelocated file offset — it would never actually fire; `insmod` would
+run straight through to completion with nothing caught.
+
+The fix mirrors step 16's exit-path fix exactly, using `mod->init`
+instead of `mod->exit` — you're still stopped inside `do_init_module`
+right now (step 7), before `do_one_initcall(mod->init)` has run, so
+`mod->init` is already the module's real, live init-function address:
+
+```
+print mod->init
+```
+```
+$1 = (int (*)(void)) 0x...
+```
+
+(That address is from one real run — module memory is placed fresh each
+boot even with `nokaslr`. Use whatever `print mod->init` gives you
+next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/03_gpio_sim/gpioctrl.ko -s .init.text 0x...
+```
+```
+y
+```
 ```
 break gpioctrl_init
+```
+```
+Breakpoint N at 0x...: gpioctrl_init. (2 locations)
+```
+
+Two locations — `N.1` is the old broken raw-offset one (matching what
+plain `break gpioctrl_init` gave a moment ago), `N.2` is the
+newly-relocated real one:
+
+```
+disable N.1
 ```
 ```
 continue
 ```
 ```
-Thread 2 hit Breakpoint N, gpioctrl_init () at gpioctrl.c:1056
+Thread 2 hit Breakpoint N.2, 0x... in init_module ()
 ```
+
+Reports as `init_module`, not `gpioctrl_init` — the same alias
+mechanics documented in module 02's walkthrough (`module_init()`
+generates a hard alias to the legacy name; both point at the identical
+address, GDB just picked one label for this particular PC). Also worth
+knowing before the next step: because `add-symbol-file` here only
+supplies a symbol address, not full compiler-generated debug info,
+GDB has nothing to attach a source line to at this exact PC — don't be
+alarmed if `list`/frame output here doesn't show `gpioctrl.c:1056` the
+way a normal breakpoint would. Stepping forward with `next` moves into
+fully-resolved source immediately, so this only affects this one landing
+point, not anything downstream in this walkthrough.
 
 ## Step 10 — watch `kzalloc()`'s zeroed memory get filled in
 
@@ -220,13 +278,13 @@ next
 print state
 ```
 ```
-$1 = (struct gpioctrl_state *) 0x...
+$2 = (struct gpioctrl_state *) 0x...
 ```
 ```
 print *state
 ```
 ```
-$2 = {lock = {...}, button = 0, led = 0, invert = false, poll_ms = 0, ...}
+$3 = {lock = {...}, button = 0, led = 0, invert = false, poll_ms = 0, ...}
 ```
 
 **What this shows:** `kzalloc()` zeroed this memory — every field reads
@@ -244,7 +302,7 @@ next
 print state->poll_ms
 ```
 ```
-$3 = 500
+$4 = 500
 ```
 
 Now matching `initial_poll_ms` (the module's parameter default) — proof
@@ -289,7 +347,7 @@ before the function returns it. A fast, honest way to see *why* an
 finish
 ```
 ```
-Value returned is $4 = 0
+Value returned is $5 = 0
 ```
 ```
 lx-dmesg
@@ -466,7 +524,7 @@ next
 print cmd
 ```
 ```
-$5 = 0x... "poll_ms=100"
+$6 = 0x... "poll_ms=100"
 ```
 
 `cmd` now holds a real, null-terminated kernel string you can `print`
@@ -517,7 +575,7 @@ advance kernel/module/main.c:863
 print mod->exit
 ```
 ```
-$6 = (void (*)(void)) 0xffff80007c32c2e0
+$7 = (void (*)(void)) 0xffff80007c32c2e0
 ```
 
 (That exact address is from one real run — module memory is placed
@@ -556,8 +614,17 @@ rmmod gpioctrl
 **Pane: gdb**
 
 ```
-Thread N hit Breakpoint N.2, gpioctrl_exit () at gpioctrl.c:1150
+Thread N hit Breakpoint N.2, 0x... in cleanup_module ()
 ```
+
+Reports as `cleanup_module`, not `gpioctrl_exit`, with no source line
+attached — confirmed live for this exact fix pattern (module 02's
+walkthrough, step 10): `add-symbol-file -s <section> <addr>` supplies an
+address, not a recompiled type or line table, so GDB falls back to
+whichever alias name it already knew and can't attach a line number.
+`module_exit()` aliases to the legacy `cleanup_module` name, the same
+mirror-image already established for the load path.
+
 ```
 next
 ```

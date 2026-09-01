@@ -130,15 +130,65 @@ insmod /mnt/labs/07_log_level/printk_log_levels.ko
 ```
 lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 ```
+
+**`break printk_log_levels_init` does not work here — confirmed live
+(this exact mechanism, on two other modules), don't trust it.**
+`printk_log_levels_init` is `__init`, placed in `.init.text`.
+`lx-symbols` relocates only a fixed, hardcoded list of sections
+(`scripts/gdb/linux/symbols.py`'s `_section_arguments()`: `.data`,
+`.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`, `.text.unlikely`)
+— `.init.text` isn't one of them. `break printk_log_levels_init` right
+now would be accepted with no error and silently resolve to a tiny,
+bogus, unrelocated file offset — it would never actually fire; `insmod`
+would run straight through with nothing caught.
+
+You're still stopped inside `do_init_module` right now (step 5), before
+`do_one_initcall(mod->init)` has run, so `mod->init` is already the
+module's real, live init-function address:
+
+```
+print mod->init
+```
+```
+$1 = (int (*)(void)) 0x...
+```
+
+(That address is from one real run — module memory is placed fresh each
+boot even with `nokaslr`. Use whatever `print mod->init` gives you
+next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/07_log_level/printk_log_levels.ko -s .init.text 0x...
+```
+```
+y
+```
 ```
 break printk_log_levels_init
+```
+```
+Breakpoint N at 0x...: printk_log_levels_init. (2 locations)
+```
+
+Two locations — `N.1` is the old broken raw-offset one, `N.2` is the
+newly-relocated real one:
+
+```
+disable N.1
 ```
 ```
 continue
 ```
 ```
-Thread 2 hit Breakpoint N, printk_log_levels_init () at printk_log_levels.c:40
+Thread 2 hit Breakpoint N.2, 0x... in init_module ()
 ```
+
+Reports as `init_module`, not `printk_log_levels_init` — the same alias
+mechanics documented in module 02's walkthrough. `add-symbol-file` here
+only supplies a symbol address, not full compiler-generated debug info,
+so this exact landing point has no source line attached; stepping
+forward clears that up immediately:
+
 ```
 next
 ```
@@ -179,12 +229,16 @@ constant. Confirm this directly rather than trust the macro definitions
 — stop at any one call site and read the format-string pointer's target:
 
 ```
-x/s $rdi
+x/s $x0
 ```
 
-(Or whichever register/argument holds the fmt pointer at the call site
-you stopped on — depends on where in the disassembly you are.) You'll
-see something like
+(`x0` is the first integer/pointer argument register under arm64's
+AAPCS64 calling convention — the fmt-string pointer, since it's the
+first argument to `printk`/`vprintk_emit`/`_printk`. Not `$rdi`, that's
+x86-64's equivalent register; this whole repo targets aarch64. Use
+whichever register actually holds it at the exact call site you stopped
+on if the disassembly shows the argument being moved elsewhere first.)
+You'll see something like
 `"\001\006printk_log_levels: level 6: KERN_INFO demonstration\n"` — the
 `\001\006` is the encoded `KERN_INFO` (numeric level 6) prefix
 `pr_info()` attached, completely invisible in the terminal's normal
