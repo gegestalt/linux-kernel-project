@@ -168,9 +168,20 @@ the comment, now demonstrated rather than taken on faith.
 
 ## Cleanup
 
+**`break open_release_cdev_exit` accepts with no error but never
+fires** — confirmed live. It's marked `__exit`, which places it in the
+`.exit.text` ELF section, and `lx-symbols` never relocates that section
+(full diagnosis, straight from this kernel's own
+`scripts/gdb/linux/symbols.py`, in module 02's and 12's walkthroughs).
+`rmmod` would complete underneath it while GDB just sits at
+`Continuing.` forever — the `print`s below would never actually run
+against a stopped exit function.
+
+**The working fix**:
+
 ```gdb
 (gdb) delete
-(gdb) break open_release_cdev_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -178,9 +189,35 @@ the comment, now demonstrated rather than taken on faith.
 rmmod open_release_cdev
 ```
 ```gdb
+Thread N hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c3204d0
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/08_open_release_cdev/open_release_cdev.ko -s .exit.text 0xffff80007c3204d0
+(y or n) y
+(gdb) break open_release_cdev_exit
+Breakpoint N at 0x110: open_release_cdev_exit. (2 locations)
+```
+
+(The address is from one real run — use whatever `print mod->exit`
+gives you; module memory placement is random per boot even with
+`nokaslr`.) Disable the broken location, keep the relocated one:
+
+```gdb
+(gdb) disable N.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod open_release_cdev
+```
+```gdb
+Thread N hit Breakpoint N.2, 0xffff80007c3204d4 in cleanup_module ()
 (gdb) print active_opens
 (gdb) print next_open_id
 ```
+
 ```bash
 # vmb:
 poweroff -f

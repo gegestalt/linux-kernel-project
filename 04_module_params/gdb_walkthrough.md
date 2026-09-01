@@ -170,14 +170,69 @@ being present in the source.
 
 ## Cleanup
 
+**`break module_params_exit` looks like it works but silently never
+fires** — confirmed live, and it's not specific to this module: `__exit`
+functions live in their own `.exit.text` ELF section, and `lx-symbols`
+never relocates that section (only a fixed list including `.text`,
+`.rodata`, `.bss`, and a few others — see module 02's and 12's
+walkthroughs for the full diagnosis via `scripts/gdb/linux/symbols.py`).
+The breakpoint resolves to a tiny raw file offset instead of a real
+kernel address, accepts with no error, and then just never stops.
+
+**The working fix**, same technique as everywhere else in this repo:
+
 ```gdb
 (gdb) delete
-(gdb) break module_params_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
 # vmb:
 rmmod module_params
+```
+```gdb
+Thread 1 hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c32b3c8
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/04_module_params/module_params.ko -s .exit.text 0xffff80007c32b3c8
+(y or n) y
+(gdb) break module_params_exit
+Breakpoint N at 0x88: module_params_exit. (2 locations)
+```
+
+(That address is from one real run and won't match yours — module
+memory placement is random per boot even with `nokaslr`, which only
+fixes the kernel image's own load address. Always use whatever `print
+mod->exit` gives you.) Disable the broken location, keep the relocated
+one:
+
+```gdb
+(gdb) disable N.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod module_params
+```
+```gdb
+Thread 1 hit Breakpoint N.2, 0xffff80007c32b3cc in cleanup_module ()
+```
+
+Live-tested, `next` from here lands inside `misc_deregister()` —
+`drivers/char/misc.c:285` — a real, fully-resolved vmlinux function, so
+`bt`/`finish` work normally there even though `cleanup_module` itself
+has no line-by-line resolution:
+
+```gdb
+(gdb) next
+misc_deregister (misc=0x... <module_params_miscdev>) at drivers/char/misc.c:285
+(gdb) finish
+```
+
+```bash
+# vmb:
 poweroff -f
 ```
 

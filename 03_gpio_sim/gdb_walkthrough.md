@@ -14,33 +14,41 @@ fires on its own, on a schedule, from a thread you didn't start.
 ## Prerequisite: gpio-sim must exist before this module can init
 
 `gpioctrl_init()` calls `gpio_device_find_by_label(gpio_label)` (default
-`"gpio-sim.0:node0"`) and fails with `-ENODEV` if nothing matches. The
-QEMU debug kernel's trimmed config kept `CONFIG_GPIO_SIM` in specifically
-for this module (see [`../gdb_debugging.md`](../gdb_debugging.md)'s config
-trim notes), but the simulated chip itself still has to be created at
-runtime, in the `vmb` pane, before `insmod`:
+`"gpio-sim.0:node0"`) and fails with `-ENODEV` if nothing matches — this
+was confirmed live the hard way: `insmod`ing `gpioctrl.ko` with nothing
+set up first fails immediately, twice (the driver retries once), with
+exactly that `-ENODEV`. `CONFIG_GPIO_SIM=m` — a *module*, not built into
+the kernel image — so `gpio-sim.ko` has to actually be loaded before
+`gpioctrl.ko` can find it.
 
-Exact, verified sequence (matches [`readme.md`](readme.md)'s own
-"Set up the simulated hardware first" section — restated here so this
-file stays self-contained):
+**`modprobe gpio-sim` does not work in this repo's QEMU/busybox
+environment** — confirmed live: `modprobe: can't change directory to
+'/lib/modules': No such file or directory`. The minimal busybox
+initramfs this repo's [`../gdb_debugging.md`](../gdb_debugging.md)
+builds has no `/lib/modules` tree for `modprobe` to search (that's a
+real difference from a normal Linux host, where [`readme.md`](readme.md)'s
+own "Set up the simulated hardware first" section — written for running
+this lab directly on your own machine, not inside this debug VM — using
+`modprobe` is correct). Inside the QEMU guest, `insmod` the built
+`gpio-sim.ko` directly instead, from the same disk image `gpioctrl.ko`
+itself is copied onto (see Environment below):
 
 ```bash
-# vmb, before insmod:
-modprobe gpio-sim
+# vmb, before insmod gpioctrl.ko:
+insmod /mnt/labs/03_gpio_sim/gpio-sim.ko
+mount -t configfs configfs /sys/kernel/config
 mkdir -p /sys/kernel/config/gpio-sim/gpio-device/node0
 echo 22 > /sys/kernel/config/gpio-sim/gpio-device/node0/num_lines
 echo 1 > /sys/kernel/config/gpio-sim/gpio-device/live
 cat /sys/kernel/config/gpio-sim/gpio-device/dev_name   # confirm it's "gpio-sim.0"
-gpiodetect | grep gpio-sim
 ```
 
-(If your busybox initramfs doesn't have `configfs` mounted, `mount -t
-configfs configfs /sys/kernel/config` first; if `gpiodetect` isn't in
-your initramfs, skip it — it's a convenience check, not required for
-the module to load.) If `dev_name` doesn't read exactly `gpio-sim.0`
-(possible if another gpio-sim device already exists this boot), pass
-the real label at load time: `insmod gpioctrl.ko
-gpio_label="<real-name>:node0" button_offset=20 led_offset=21`.
+(`gpiodetect` isn't in this repo's minimal busybox build — skip it, it's
+a convenience check on a real host, not required for the module to
+load.) If `dev_name` doesn't read exactly `gpio-sim.0` (possible if
+another gpio-sim device already exists this boot), pass the real label
+at load time: `insmod gpioctrl.ko gpio_label="<real-name>:node0"
+button_offset=20 led_offset=21`.
 
 ## Environment
 
@@ -51,8 +59,15 @@ modinfo gpioctrl.ko | grep vermagic
 sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
 sudo mkdir -p /tmp/vmb-mnt/03_gpio_sim
 sudo cp gpioctrl.ko /tmp/vmb-mnt/03_gpio_sim/
+sudo cp /home/adiopocere/Desktop/codes/linux_mainline/drivers/gpio/gpio-sim.ko /tmp/vmb-mnt/03_gpio_sim/
 sudo umount /tmp/vmb-mnt
 ```
+
+`gpio-sim.ko` is built as part of the debug kernel tree itself (it's a
+real upstream driver, not something this repo owns) — it isn't produced
+by this lab's own `make`, so it has to be copied from
+`linux_mainline/drivers/gpio/gpio-sim.ko` explicitly, alongside
+`gpioctrl.ko`, rather than built here.
 
 ## tmux layout
 
@@ -76,12 +91,14 @@ Line 534:  invert_store           (sysfs RW attribute)
 Line 598:  poll_ms_store          (sysfs RW attribute)
 ```
 
-(`gpioctrl_exit`'s `info line` resolves into
-`include/linux/timekeeping.h` rather than `gpioctrl.c` — its very first
-executed line is the inlined `ktime_get_ns()` call that opens the
-function; `break gpioctrl_exit` still lands you at the right place, GDB
-is just naming the *first instruction's* originating header rather than
-the function's own file for that specific address.)
+(`gpioctrl_exit`'s *static* `info line` — run against the standalone
+`.ko` file, before any of this — resolves into
+`include/linux/timekeeping.h` rather than `gpioctrl.c`, because its
+very first executed line is the inlined `ktime_get_ns()` call that
+opens the function. That's a fine, accurate offline fact about the
+binary. **What it does not mean is that `break gpioctrl_exit` will
+actually stop there once the module is loaded live** — see the Cleanup
+section below for why, confirmed live, it doesn't.)
 
 ### Step 1 — init: watch state get built, then confirm the polling starts
 
@@ -263,9 +280,20 @@ follow the call rather than skip over it.
 
 ## Cleanup
 
+**`break gpioctrl_exit` accepts with no error but never fires** —
+confirmed live, the same underlying cause called out above:
+`gpioctrl_exit` is `__exit`, placed in the `.exit.text` ELF section,
+which `lx-symbols` never relocates (full diagnosis, straight from this
+kernel's `scripts/gdb/linux/symbols.py`, in module 02's and 12's
+walkthroughs). The breakpoint resolves to a raw file offset instead of
+a real kernel address; `rmmod` completes underneath it while GDB sits
+at `Continuing.` forever.
+
+**Reaching `cleanup_module` itself, the working fix**:
+
 ```gdb
 (gdb) delete
-(gdb) break gpioctrl_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -273,19 +301,75 @@ follow the call rather than skip over it.
 rmmod gpioctrl
 ```
 ```gdb
-Thread 2 hit Breakpoint N, gpioctrl_exit () at .../timekeeping.h:174
-(gdb) next   # step forward until you're back in gpioctrl.c
-(gdb) next    # cancel_delayed_work_sync(&gpio_work) - the critical line
+Thread N hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c32c2e0
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/03_gpio_sim/gpioctrl.ko -s .exit.text 0xffff80007c32c2e0
+(y or n) y
+(gdb) break gpioctrl_exit
+Breakpoint N at 0x100: gpioctrl_exit. (2 locations)
 ```
 
-**This line matters more than it looks.** `cancel_delayed_work_sync()`
-blocks until any *currently running* `gpioctrl_work_fn()` has finished
-— if `rmmod` proceeded to `kfree(state)` while a workqueue callback was
-mid-flight, that callback would dereference already-freed memory the
-instant it resumed. If you want to see this guarantee in action rather
-than just read the source comment claiming it: set a second breakpoint
-on `gpioctrl_work_fn`, get it to hit, and *while still stopped there*,
-run `rmmod gpioctrl` from `vmb` — it will hang (not crash, not fail —
+(The address is from one real run — always use whatever `print
+mod->exit` gives you; module memory placement is random per boot even
+with `nokaslr`.) Disable the broken location, keep the relocated one:
+
+```gdb
+(gdb) disable N.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod gpioctrl
+```
+```gdb
+Thread N hit Breakpoint N.2, 0xffff80007c32c2e8 in cleanup_module ()
+```
+
+**Reaching `cancel_delayed_work_sync()` specifically — a simpler,
+independent technique.** `cleanup_module`'s own body has no line-by-line
+resolution (same as everywhere else in this repo), and live-tested,
+`next` from its entry ran straight through the entire function in one
+step rather than landing inside a call the way it does for some other
+modules — which call a `next` lands you in depends on the exact
+compiled instruction layout, not something worth relying on. Since
+`cancel_delayed_work_sync()` is an ordinary, fully-resolved vmlinux
+function (no relocation issue — only `__exit`-marked *module* code has
+this problem), break on it directly instead, before continuing past the
+`__do_sys_delete_module` entry hit — no `add-symbol-file` needed for
+this part at all:
+
+```gdb
+(gdb) break __do_sys_delete_module
+(gdb) break cancel_delayed_work_sync
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod gpioctrl
+```
+```gdb
+Thread N hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) continue
+Thread N hit Breakpoint N, cancel_delayed_work_sync (dwork=0x...) at kernel/workqueue.c:4632
+```
+
+Confirmed live: continuing straight from the syscall entry lands
+exactly here, with a real name, real line, and full `bt`/`next`/
+`finish` support — no section-relocation workaround required, because
+this code lives in `vmlinux` itself, not in the module's own
+`.exit.text`.
+
+**Why this line matters.** `cancel_delayed_work_sync()` blocks until
+any *currently running* `gpioctrl_work_fn()` has finished — if `rmmod`
+proceeded to `kfree(state)` while a workqueue callback was mid-flight,
+that callback would dereference already-freed memory the instant it
+resumed. To see this guarantee in action rather than just read the
+source comment claiming it: set a separate breakpoint on
+`gpioctrl_work_fn`, get it to hit, and *while still stopped there*, run
+`rmmod gpioctrl` from `vmb` — it will hang (not crash, not fail —
 genuinely block) until you `continue` past the work function, because
 `cancel_delayed_work_sync()` is waiting on exactly that. `poweroff -f`
 the guest afterward regardless of which path you took; a hung `rmmod`

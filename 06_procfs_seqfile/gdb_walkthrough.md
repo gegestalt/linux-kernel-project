@@ -196,14 +196,62 @@ separate reset logic in the source implies.
 
 ## Cleanup
 
+**`break procfs_seqfile_exit` accepts with no error but never fires** —
+confirmed live. It's marked `__exit`, which places it in the
+`.exit.text` ELF section, and `lx-symbols` never relocates that section
+(full diagnosis, straight from this kernel's own
+`scripts/gdb/linux/symbols.py`, in module 02's and 12's walkthroughs).
+The breakpoint resolves to a tiny raw file offset instead of a real
+kernel address; `rmmod` completes underneath it while GDB just sits at
+`Continuing.` forever.
+
+**The working fix**:
+
 ```gdb
 (gdb) delete
-(gdb) break procfs_seqfile_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
 # vmb:
 rmmod procfs_seqfile
+```
+```gdb
+Thread N hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c32b8b0
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/06_procfs_seqfile/procfs_seqfile.ko -s .exit.text 0xffff80007c32b8b0
+(y or n) y
+(gdb) break procfs_seqfile_exit
+Breakpoint N at 0xb8: procfs_seqfile_exit. (2 locations)
+```
+
+(The address is from one real run — use whatever `print mod->exit`
+gives you; module memory placement is random per boot even with
+`nokaslr`.) Disable the broken location, keep the relocated one:
+
+```gdb
+(gdb) disable N.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod procfs_seqfile
+```
+```gdb
+Thread N hit Breakpoint N.2, 0xffff80007c32b8b4 in cleanup_module ()
+```
+
+Real hit, real name (`module_exit()` aliases it to `cleanup_module`,
+same mechanism module 01/02 cover for `init_module`). `next`/`bt`/
+`finish` work normally from here on any real vmlinux function it calls
+into, even though `cleanup_module` itself has no line-by-line
+resolution.
+
+```bash
+# vmb:
 poweroff -f
 ```
 
