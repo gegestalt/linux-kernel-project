@@ -14,10 +14,9 @@ particular is only safe there.
 
 This document is the `dmesg`-and-shell-commands pass — build it, load it,
 watch what it prints. For stepping through any module's own code line by
-line with a real debugger instead, see [`gdb_debugging.md`](gdb_debugging.md)
-— its own per-module quick-reference table (§7) is the GDB equivalent of
-the walkthrough below, and every module's `readme.md` has a full
-"Debugging with GDB" section.
+line with a real debugger instead, each module's own `gdb_walkthrough.md`
+is the GDB equivalent of the walkthrough below — fully self-contained,
+tmux session through cleanup, no setup beyond that one file.
 
 ## Before you start
 
