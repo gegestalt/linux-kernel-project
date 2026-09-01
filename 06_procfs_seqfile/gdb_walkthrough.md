@@ -143,10 +143,18 @@ release something `start()` acquired unconditionally.
 file with exactly one thing to print:
 
 ```gdb
-(gdb) delete
+(gdb) info breakpoints
+(gdb) delete <the four events_seq_* breakpoint numbers from step 1>
 (gdb) break info_show
 (gdb) continue
 ```
+
+(Bare `delete` with no numbers deletes *everything*, but first asks
+`Delete all breakpoints? (y or n)` — if that prompt's confirmation gets
+swallowed by a command typed right after it, nothing actually gets
+deleted and you're left debugging against stale breakpoints. Naming
+numbers explicitly, checked with `info breakpoints` first, skips the
+prompt entirely.)
 ```bash
 # vmb:
 cat /proc/procfs_demo/info
@@ -170,7 +178,8 @@ read directly out of memory rather than took on faith.
 ### Step 3 — the write path: clearing the log
 
 ```gdb
-(gdb) delete
+(gdb) info breakpoints
+(gdb) delete <the info_show breakpoint's number from step 2>
 (gdb) break events_write
 (gdb) continue
 ```
@@ -208,7 +217,8 @@ kernel address; `rmmod` completes underneath it while GDB just sits at
 **The working fix**:
 
 ```gdb
-(gdb) delete
+(gdb) info breakpoints
+(gdb) delete <the events_write breakpoint's number from step 3>
 (gdb) break __do_sys_delete_module
 (gdb) continue
 ```
