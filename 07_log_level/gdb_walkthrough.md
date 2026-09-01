@@ -145,6 +145,18 @@ changed is a runtime dynamic-debug flag, no rebuild.
 ```gdb
 (gdb) delete
 ```
+
+(No breakpoints are actually armed at this point in the walkthrough —
+`finish` in step 3 already ran to completion — but if you left any set
+along the way, name their numbers explicitly rather than confirming a
+bare `delete`'s `(y or n)` prompt: it can eat a queued-up next command
+instead of actually deleting anything. `printk_log_levels_exit()`
+itself is a single `pr_info()` call with nothing else to inspect, so
+this module has no reason to break on it — unlike every other module
+past 01, whose `__exit`-marked cleanup function would need the
+`.exit.text` relocation workaround documented in module 02's and
+12's walkthroughs to catch at all.)
+
 ```bash
 # vmb:
 rmmod printk_log_levels

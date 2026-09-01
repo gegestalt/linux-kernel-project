@@ -182,9 +182,21 @@ reading," the same convention every regular file relies on.
 
 ## Cleanup
 
+**A bare `break register_cdev_exit` right after `lx-symbols` does not
+work** — confirmed live. `register_cdev_exit` is marked `__exit`, which
+places it in the `.exit.text` ELF section, and `lx-symbols` never
+relocates that section (only a fixed list including `.text`, `.rodata`,
+`.bss`, and a few others — full diagnosis, straight from this kernel's
+`scripts/gdb/linux/symbols.py`, in module 02's and 12's walkthroughs).
+The breakpoint resolves to a tiny raw file offset instead of a real
+kernel address, accepts with no error, and then simply never fires —
+`rmmod` completes normally underneath it.
+
+**The working fix**:
+
 ```gdb
 (gdb) delete
-(gdb) break register_cdev_exit
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
@@ -192,7 +204,31 @@ reading," the same convention every regular file relies on.
 rmmod register_cdev
 ```
 ```gdb
-Thread 2 hit Breakpoint N, register_cdev_exit () at ../../linux_mainline/include/linux/timekeeping.h:174
+Thread 1 hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c32b4d0
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/05_register_cdev/register_cdev.ko -s .exit.text 0xffff80007c32b4d0
+(y or n) y
+(gdb) break register_cdev_exit
+Breakpoint N at 0x1b0: register_cdev_exit. (2 locations)
+```
+
+(The address is from one real run — always use whatever `print
+mod->exit` gives you; module memory placement is random per boot even
+with `nokaslr`.) Disable the broken location, keep the relocated one:
+
+```gdb
+(gdb) disable N.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod register_cdev
+```
+```gdb
+Thread 1 hit Breakpoint N.2, 0xffff80007c32b4d4 in cleanup_module ()
 (gdb) next   # step forward until you're back in register_cdev.c
 (gdb) print atomic_read(&open_count)
 ```

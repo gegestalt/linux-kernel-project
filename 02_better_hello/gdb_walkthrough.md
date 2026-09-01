@@ -154,27 +154,101 @@ Run till exit from #0  my_init () at better_hello.c:16
 Value returned is $1 = 0
 ```
 
-Exit path, same shape as module 01:
+Exit path — **not** the same shape as module 01, and this is worth
+getting right rather than assuming it just works. `my_exit` is marked
+`__exit`, which the linker places in its own section, `.exit.text`,
+separate from the module's regular `.text`. `lx-symbols` only relocates
+a fixed, hardcoded list of sections when it maps a loaded module in —
+`.exit.text` isn't one of them (confirmed straight from this kernel's
+`scripts/gdb/linux/symbols.py`). So `break my_exit` right after
+`lx-symbols` looks like it works — GDB accepts it with no error — but
+it silently resolves to the function's raw, unrelocated file offset
+(something tiny like `0x58`, not a real kernel address):
 
 ```gdb
 (gdb) break my_exit
+Breakpoint 3 at 0x58: file better_hello.c, line 21.
+```
+
+Confirmed live: `continue` past this, `rmmod better_hello` in `vmb`,
+and the module unloads cleanly (`dmesg` shows `bye bye my luv`) while
+GDB just sits at `Continuing.` forever, having quietly missed it —
+there's no error pointing at the real cause. `init_module` doesn't have
+this problem because module 01 uses the legacy entry points directly,
+with no `__exit`-driven section split; from here on, every module in
+this repo hits exactly this.
+
+**The fix, verified live** — break on the generic kernel hook every
+`rmmod` goes through, get the exit function's real address straight out
+of the kernel's own data, and register it with GDB manually:
+
+```gdb
+(gdb) break __do_sys_delete_module
 (gdb) continue
 ```
 ```bash
 # vmb:
 rmmod better_hello
 ```
+```gdb
+Thread 2 hit Breakpoint N, __do_sys_delete_module (flags=..., name_user=...) at kernel/module/main.c:808
+(gdb) advance kernel/module/main.c:863
+__do_sys_delete_module (...) at kernel/module/main.c:863
+863         mod->exit();
+(gdb) print mod->exit
+$1 = (void (*)(void)) 0xffff80007c320028
 ```
-Thread 2 hit Breakpoint 3, my_exit () at better_hello.c:21
-21          printk(KERN_INFO "bye bye my luv\n");
-(gdb) lx-dmesg
+
+(That exact address is from one real run and won't match yours — module
+memory is allocated fresh each boot regardless of `nokaslr`, which only
+fixes the kernel image's own load address, not per-module placement.
+Always use whatever `print mod->exit` gives you.)
+
+```gdb
+(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/02_better_hello/better_hello.ko -s .exit.text 0xffff80007c320028
+(y or n) y
+(gdb) break my_exit
+Breakpoint 4 at 0x58: my_exit. (2 locations)
 ```
+
+Two locations now: `4.1` is still the old broken raw-offset one, `4.2`
+is the newly-relocated real one. Disable the broken one, keep the
+working one:
+
+```gdb
+(gdb) disable 4.1
+(gdb) continue
+```
+```bash
+# vmb:
+rmmod better_hello
+```
+```gdb
+Thread 2 hit Breakpoint 4.2, 0xffff80007c32002c in cleanup_module ()
+```
+
+Real name, real hit — live-tested, it reports as `cleanup_module`
+rather than `my_exit`: `module_exit()` aliases the function to the
+legacy `cleanup_module` symbol too, the exact mirror of what section
+"Verified statically" above already showed for `init_module`/`my_init`.
+`bt` here shows the full `delete_module(2)` syscall chain straight down
+to the arm64 syscall entry trampoline — the same evidence-by-backtrace
+approach as everywhere else in this repo, just for `rmmod` instead of
+`insmod`.
 
 ## Cleanup
 
 ```gdb
-(gdb) delete
+(gdb) delete 4
 ```
+
+(Bare `delete` with no arguments deletes *all* breakpoints too, but it
+first asks `Delete all breakpoints? (y or n)` — if you're driving this
+session non-interactively that confirmation prompt can eat your next
+command instead of actually deleting anything, leaving stale
+breakpoints active. Naming the number, as above, skips the prompt
+entirely.)
+
 ```bash
 # vmb:
 poweroff -f
