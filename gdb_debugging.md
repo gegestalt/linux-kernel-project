@@ -105,6 +105,40 @@ mkfs.ext4 -q -F labs-disk.img
 worth a rebuild for. `CONFIG_VIRTIO_BLK`/`CONFIG_EXT4_FS` were already
 built in, so a disk image was the zero-rebuild option.)
 
+### tmux layout: set this up once, reuse for every module
+
+One session, two side-by-side panes — `vmb` (left) runs QEMU, `gdb`
+(right) runs gdb. Set this up once per sitting, not once per module —
+you'll reboot the guest between modules, but there's no need to tear
+down and recreate the tmux session itself each time. This is the actual
+layout this whole workflow was built and verified against; every
+"in the vmb pane" / "in the gdb pane" instruction elsewhere in this repo
+means these two panes.
+
+```bash
+tmux kill-session -t kgdb 2>/dev/null
+tmux new-session -d -s kgdb -x 220 -y 50
+tmux split-window -h -t kgdb
+tmux set -g mouse on
+tmux select-pane -t kgdb:0.0 -T vmb
+tmux select-pane -t kgdb:0.1 -T gdb
+tmux set -t kgdb pane-border-status top
+tmux attach -t kgdb
+```
+
+The first line is a clean-slate kill of any old session of the same
+name — safe to run even if nothing exists yet (`2>/dev/null` swallows
+the "no such session" error), and it means you can re-run this whole
+block any time you want to start completely fresh without first
+figuring out what's still running. After `attach`, you have a real,
+clickable two-pane terminal: click either pane to focus it (mouse is
+on), or `Ctrl-b` then an arrow key. Closing your terminal tab does
+**not** kill this session — tmux keeps it running in the background;
+`tmux attach -t kgdb` from any terminal gets you back into the exact
+same state, panes and all. Nothing here actually ends until you
+`poweroff -f` the guest and/or run `tmux kill-session -t kgdb`
+yourself.
+
 ### Per-module: build against the debug kernel, not the host's
 
 Every module's Makefile hardcodes `/lib/modules/$(uname -r)/build` — that
@@ -127,18 +161,20 @@ sudo cp *.ko /tmp/vmb-mnt/NN_module_name/
 sudo umount /tmp/vmb-mnt
 ```
 
-### Boot the guest (one tmux pane) and attach GDB (another)
+### Boot the guest (in `vmb`) and attach GDB (in `gdb`)
+
+In the `vmb` pane (left) of the `kgdb` tmux session set up above:
 
 ```bash
-tmux new-session -d -s vmb -x 220 -y 50
-tmux send-keys -t vmb "qemu-system-aarch64 \
-  -M virt -cpu max -m 1024 -smp 2 \
+qemu-system-aarch64 -M virt -cpu max -m 1024 -smp 2 \
   -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
   -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
   -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
-  -append 'console=ttyAMA0 rdinit=/init nokaslr' \
-  -nographic -s" Enter
+  -append "console=ttyAMA0 rdinit=/init nokaslr" -nographic -s
 ```
+
+Wait for `=== VM B (QEMU) ready ===` and a `~ #` prompt before touching
+the `gdb` pane.
 
 **`nokaslr` is not optional.** `CONFIG_RANDOMIZE_BASE=y` is set, and
 without disabling it at boot, every address GDB reads out of the static
@@ -148,9 +184,11 @@ fire (this happened on the very first attempt this session: `insmod`
 ran straight through with no stop, no error, nothing — the quietest
 possible failure mode). No kernel rebuild needed, it's a boot parameter.
 
+In the `gdb` pane (right):
+
 ```bash
-tmux new-session -d -s gdbsess -x 220 -y 50
-tmux send-keys -t gdbsess "cd /home/adiopocere/Desktop/codes/linux_mainline && gdb -q -iex 'set auto-load safe-path /' vmlinux" Enter
+cd /home/adiopocere/Desktop/codes/linux_mainline
+gdb -q -iex 'set auto-load safe-path /' vmlinux
 ```
 
 **The `-iex 'set auto-load safe-path /'` matters too** — plain `set
@@ -163,17 +201,22 @@ own internal `import linux` (the script expects the auto-loader's own
 path setup, not a bare manual `source`). `-iex` runs before the file
 loads, so auto-load succeeds normally.
 
+One command per line — see rule 3 above:
+
 ```gdb
-(gdb) target remote :1234
-(gdb) break do_init_module
-(gdb) continue
+target remote :1234
+break do_init_module
+continue
 ```
+
+Then in the `vmb` pane:
+
 ```bash
-# in the vmb pane:
-tmux send-keys -t vmb "insmod /mnt/labs/NN_module_name/your_module.ko" Enter
+insmod /mnt/labs/NN_module_name/your_module.ko
 ```
+
 ```gdb
-# back in gdbsess - real output from this session, module 01:
+# back in the gdb pane - real output from this session, module 01:
 Thread 2 hit Breakpoint 1, do_init_module (mod=mod@entry=0xffff80007c322040) at kernel/module/main.c:3089
 3089	{
 (gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
@@ -190,12 +233,15 @@ Value returned is $1 = 0
 ```
 
 From here it's the same general pattern as any KGDB session — see
-section 6 below. To end a session: `delete` breakpoints in `gdbsess`,
-then `tmux send-keys -t vmb "poweroff -f" Enter` and `tmux kill-session`
-both panes. Rebooting the guest fresh for a new module is cheap (a few
-seconds) — no need to keep one guest running across unrelated modules.
+section 6 below. To end a session: in the `gdb` pane, `delete` your
+breakpoints (name their numbers — see rule 3), then in the `vmb` pane
+run `poweroff -f`. The `kgdb` tmux session itself can stay up — reboot
+the guest fresh for the next module rather than tearing down and
+recreating the tmux layout each time (a fresh boot is cheap, a few
+seconds). Only run `tmux kill-session -t kgdb` if you actually want to
+close the whole layout down.
 
-### Two rules that cause real, confusing-looking failures if missed
+### Three rules that cause real, confusing-looking failures if missed
 
 Both were hit for real, live, running exactly this walkthrough:
 
@@ -215,12 +261,170 @@ Both were hit for real, live, running exactly this walkthrough:
    again. This is easy to mistake for a broken terminal; it's the guest
    correctly waiting for you.
 
+3. **Paste exactly one command at a time into `gdb` — never a
+   multi-line block.** This one is easy to dismiss until it happens to
+   you: depending on your terminal, pasting several lines at once can
+   get buffered as a *single* input instead of one command per line, and
+   gdb's readline will happily concatenate them into one bogus command.
+   Confirmed live, this exact paste —
+   ```
+   break events_seq_start
+   break events_seq_next
+   break events_seq_show
+   break events_seq_stop
+   continue
+   ```
+   — did not set four breakpoints and continue. It produced one:
+   `Function "events_seq_start\n  break events_seq_next\n  break
+   events_seq_show\n  break events_seq_stop\n  continue" not defined`,
+   followed by a bogus *pending* breakpoint on a function whose "name"
+   is the whole garbled block. The same thing happened one step earlier
+   to a `cd ... / gdb ... / target remote :1234 / break do_init_module /
+   continue` paste: `target remote` never actually ran, so the target
+   was never connected, and the next command (`lx-symbols`) failed with
+   `Python Exception <class 'gdb.error'>: No registers.` — a confusing
+   error that has nothing to do with symbols and everything to do with
+   there being no live target yet. Every multi-line `gdb` block in this
+   repo's docs (this file included) is written to be read top to bottom,
+   **one line pasted or typed, Enter, wait for `(gdb)` to reappear, then
+   the next line** — never select-and-paste the whole block. The same
+   applies to `vmb`: one shell command at a time.
+
 If a session ever gets into a confusing state, `info breakpoints` in
 `gdb` and a fresh `capture-pane`-style look at both panes' actual
 scrollback (not just what's visible right now) will show you exactly
 what's pending — a stuck `Continuing.` with no matching hit means
 something on the guest side was never triggered, or the guest itself is
-still frozen from an earlier interrupt.
+still frozen from an earlier interrupt, or (per rule 3) a paste got
+mangled and nothing you think you sent actually ran.
+
+## Smoke test: verify the whole setup, start to finish
+
+Run this once, using module 01 (the simplest one — no extra setup like
+gpio-sim), before trying to debug anything else. If every step below
+produces the output shown, the entire chain works end to end: the build
+against the debug tree, getting a `.ko` onto the guest, the QEMU boot,
+the gdbstub connection, a KGDB breakpoint actually firing, module symbol
+loading, single-stepping, and reading a return value. Anything that
+breaks past this point is specific to whatever module you're debugging,
+not the environment itself.
+
+**Every numbered step here is exactly one command.** Send it, wait for
+the prompt (`(gdb)` or `~ #`) to reappear, read the output, then move to
+the next step. Do not paste more than one step at a time — see rule 3
+above for exactly what goes wrong if you do.
+
+0. Set up the tmux layout (the "tmux layout" section above) if you
+   haven't already — you need the `vmb` and `gdb` panes open before step
+   4.
+1. Build module 01 against the debug tree:
+   ```bash
+   cd 01_hello_init
+   make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
+   ```
+2. Confirm the vermagic matches the debug kernel, not your host's:
+   ```bash
+   modinfo hello.ko | grep vermagic
+   ```
+   Expect `7.2.0-kgdb-debug+ ...`. If it reports your host's own kernel
+   version instead, the module was built against the wrong tree — stop
+   here and fix the build command before continuing.
+3. Copy it onto the scratch disk:
+   ```bash
+   sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
+   sudo mkdir -p /tmp/vmb-mnt/01_hello_init
+   sudo cp hello.ko /tmp/vmb-mnt/01_hello_init/
+   sudo umount /tmp/vmb-mnt
+   ```
+4. In the `vmb` pane, boot the guest:
+   ```bash
+   qemu-system-aarch64 -M virt -cpu max -m 1024 -smp 2 \
+     -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
+     -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
+     -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
+     -append "console=ttyAMA0 rdinit=/init nokaslr" -nographic -s
+   ```
+   Wait for `=== VM B (QEMU) ready ===` and a `~ #` prompt before moving on.
+5. In the `gdb` pane, start gdb:
+   ```bash
+   cd /home/adiopocere/Desktop/codes/linux_mainline
+   gdb -q -iex 'set auto-load safe-path /' vmlinux
+   ```
+   Expect `Reading symbols from vmlinux...` and a `(gdb)` prompt.
+6. Connect to the guest:
+   ```gdb
+   target remote :1234
+   ```
+   Expect `Remote debugging using :1234` followed by a real source
+   location (something like `alternative_has_cap_unlikely (...) at
+   ./arch/arm64/include/asm/alternative-macros.h:254`). If you instead
+   get nothing, or an error, stop here — nothing past this step will
+   work until this connects (see rule 3: a mangled paste is the most
+   common reason this silently fails).
+7. Set the entry breakpoint:
+   ```gdb
+   break do_init_module
+   ```
+   Expect `Breakpoint 1 at 0x...: file kernel/module/main.c, line ...`.
+8. ```gdb
+   continue
+   ```
+   Expect `Continuing.` and nothing else yet — the guest is running
+   again, waiting for you to trigger the breakpoint from the other pane.
+9. Back in the `vmb` pane:
+   ```bash
+   insmod /mnt/labs/01_hello_init/hello.ko
+   ```
+   Don't press Enter again yet — switch to the gdb pane first.
+10. In the gdb pane, confirm the hit:
+    ```
+    Thread 2 hit Breakpoint 1, do_init_module (mod=...) at kernel/module/main.c:3089
+    ```
+    This is the real proof the gdbstub connection and KGDB breakpoint
+    machinery both work — you're stopped inside the live kernel, mid
+    syscall, with a real module pointer.
+11. Load the module's own symbols now that it's mapped in:
+    ```gdb
+    lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+    ```
+    Expect `loading @0x...: .../01_hello_init/hello.ko`.
+12. ```gdb
+    break init_module
+    ```
+    Expect `Breakpoint 2 at 0x...: file hello.c, line 10.` — a real
+    source line in your own module now, not a kernel file.
+13. ```gdb
+    continue
+    ```
+14. Confirm the hit:
+    ```
+    Thread 2 hit Breakpoint 2, init_module () at hello.c:10
+    10	    printk(KERN_INFO "Hello luv .\n");
+    ```
+15. ```gdb
+    next
+    ```
+    Expect line `16	    return 0;` — single-stepping works.
+16. ```gdb
+    finish
+    ```
+    Expect `Value returned is $1 = 0` — reading a real return value
+    works.
+17. Clean up:
+    ```gdb
+    delete 1 2
+    ```
+    ```bash
+    # vmb:
+    rmmod hello
+    ```
+    ```bash
+    # vmb:
+    poweroff -f
+    ```
+
+If all 17 steps matched, the environment is confirmed working and
+you're ready to move on to any module's own `gdb_walkthrough.md`.
 
 ## Alternative path: two VMware VMs instead of QEMU
 
