@@ -74,66 +74,8 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md). Full environment setup (debug kernel build, KGDB-over-serial, `lx-symbols`)
-is in [`../gdb_debugging.md`](../gdb_debugging.md). Both breakpoint
-targets below were confirmed to resolve to real, compiled debug info
-before being written down here:
-
-```bash
-$ gdb -q -batch -nx -ex "file hello.ko" -ex "info line init_module" -ex "info line cleanup_module" hello.ko
-Line 9 of "hello.c" starts at address 0x18 <init_module> and ends at 0x20 <init_module+8>.
-Line 20 of "hello.c" starts at address 0x60 <cleanup_module> and ends at 0x68 <cleanup_module+8>.
-```
-
-**The load path.** `init_module` doesn't exist as a symbol until this
-`.ko` is actually loading, so arm a catch-all first:
-
-```gdb
-(gdb) break do_init_module
-(gdb) continue
-```
-```bash
-sudo insmod ./hello.ko
-```
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break init_module
-(gdb) continue
-(gdb) next                 # step onto the printk() line itself
-(gdb) finish                # run to return, confirm the return value is 0
-```
-
-Because this module uses the legacy `init_module`/`cleanup_module` names
-directly (see what this demonstrates, above), those are literally the
-symbol names GDB resolves — no macro indirection to see through, which
-makes this the simplest possible first GDB session before trying a module
-with real state to inspect.
-
-**The unload path.** Once the module is loaded, `cleanup_module` already
-exists as a real symbol — no catch-all needed this time, just break on
-it directly and unload from the guest:
-
-```gdb
-(gdb) break cleanup_module
-(gdb) continue
-```
-```bash
-sudo rmmod hello
-```
-```gdb
-(gdb) bt                    # the call chain: sys_delete_module -> ... -> cleanup_module
-(gdb) next                   # onto the second printk()
-(gdb) finish                  # run to return - cleanup_module is void, nothing to inspect on return
-```
-
-`bt` here is worth reading closely: it's the mirror image of what
-`do_init_module` showed you on the way in — a `delete_module(2)` syscall
-entry chain down to this module's own `cleanup_module`, the exact
-generic removal machinery `rmmod` is a thin wrapper around (the precise
-frame names depend on your kernel version's syscall entry naming
-convention — read whatever `bt` actually prints rather than expecting
-an exact match here). Compare it against `bt` from the `init_module`
-breakpoint above — same shape, opposite direction.
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md).
 

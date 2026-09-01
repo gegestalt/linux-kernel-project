@@ -1,363 +1,560 @@
-# GDB walkthrough — 13_kernel_memory
+# GDB walkthrough — 13_kernel_memory, hands-on, start to finish
 
 `kernel_memory.c` exposes three kernel allocators — `kmalloc()`,
 `vmalloc()`, `kmem_cache_alloc()` — behind one sysfs control slot,
-tracking exactly one live allocation at a time. The debugging angle
-this module is built for: printing the *same* pointer through each
+tracking exactly one live allocation at a time. The debugging angle this
+module is built for: printing the *same kind of pointer* through each
 allocator's different lens (`ksize()`'s notion of "actual size" only
 applies to `kmalloc`; `vmalloc`'s pages are virtually, not physically,
 contiguous; a `kmem_cache` object always comes back exactly
-`CACHE_OBJ_SIZE`) — differences that are invisible from the call site
-alone but become concrete the moment you inspect what each call
-actually returned.
+`CACHE_OBJ_SIZE`) — differences invisible from the call site alone that
+become concrete the moment you inspect what each call actually returned.
 
-## Environment
+Every command below says exactly which pane. One command per step,
+always — paste it, wait for the prompt to come back, then the next one.
+
+`do_allocate()` — like module 11's `increment_once()` — has no
+standalone symbol; it's inlined into `allocate_store()` (confirmed
+statically before this walkthrough was written: `info line do_allocate`
+reports an address *inside* `allocate_store`). Break on `allocate_store`
+and step through; there's no separate frame for `do_allocate` in a
+backtrace.
+
+---
+
+## Step 0 — start the tmux session
+
+*Regular terminal, not tmux yet.*
+
+```bash
+tmux kill-session -t kgdb 2>/dev/null
+tmux new-session -d -s kgdb -x 220 -y 50
+tmux split-window -h -t kgdb
+tmux set -g mouse on
+tmux select-pane -t kgdb:0.0 -T vmb
+tmux select-pane -t kgdb:0.1 -T gdb
+tmux set -t kgdb pane-border-status top
+tmux attach -t kgdb
+```
+
+Two panes now: **vmb** (left) and **gdb** (right).
+
+## Step 1 — build it, copy onto the scratch disk
+
+*Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
 cd 13_kernel_memory
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
+```
+```bash
 modinfo kernel_memory.ko | grep vermagic
+```
+```bash
 sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
 sudo mkdir -p /tmp/vmb-mnt/13_kernel_memory
 sudo cp kernel_memory.ko /tmp/vmb-mnt/13_kernel_memory/
 sudo umount /tmp/vmb-mnt
 ```
 
-## tmux layout
+## Step 2 — boot the guest
 
-Standard `vmb` + `gdb` panes inside the `kgdb` tmux session — see [`../gdb_debugging.md`](../gdb_debugging.md). **One gdb command per paste, always** — a multi-line paste can get merged into one bogus command instead of running one line per Enter (that doc's third gotcha rule).
+**Pane: vmb**
 
-## Real, verified breakpoint targets
-
-```
-Line 207: allocate_store   (do_allocate() is inlined into this - see below)
-Line 145: do_free
-Line 266: info_show
-Line 294: stats_show
-Line 324: kernel_memory_init
-Line 353: kernel_memory_exit
-```
-
-Like module 11's `increment_once()`, `do_allocate()` has no standalone
-symbol — confirmed statically:
-
-```
-$ gdb -q -batch -nx -ex "file kernel_memory.ko" -ex "info line do_allocate" kernel_memory.ko
-Line 91 of "kernel_memory.c" starts at address 0x4d8 <allocate_store+336> ...
-```
-
-Inlined into `allocate_store` — `break allocate_store` and step
-through; there's no separate frame for `do_allocate` to show up in a
-backtrace.
-
-## The walkthrough
-
-### Step 1 — load and confirm nothing is allocated yet
-
-```gdb
-(gdb) target remote :1234
-(gdb) lx-version
-(gdb) break do_init_module
-(gdb) continue
-```
 ```bash
-# vmb:
+qemu-system-aarch64 -M virt -cpu max -m 1024 -smp 2 \
+  -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
+  -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
+  -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
+  -append "console=ttyAMA0 rdinit=/init nokaslr" -nographic -s
+```
+
+Wait for `=== VM B (QEMU) ready ===` and `~ #`.
+
+## Step 3 — start gdb, connect
+
+**Pane: gdb**
+
+```bash
+cd /home/adiopocere/Desktop/codes/linux_mainline && gdb -q -iex 'set auto-load safe-path /' vmlinux
+```
+```
+target remote :1234
+```
+```
+lx-version
+```
+
+## Step 4 — load the module
+
+**Pane: gdb**
+
+```
+break do_init_module
+```
+```
+continue
+```
+
+**Pane: vmb**
+
+```bash
 insmod /mnt/labs/13_kernel_memory/kernel_memory.ko
 ```
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+
+**Pane: gdb**
+
 ```
+lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 cat /sys/kernel/kernel_memory/info
 ```
+
 Should read `type=none requested_bytes=0 actual_bytes=0 ...`.
 
-### Step 2 — `kmalloc`: watch `ksize()` diverge from the request
+## Step 5 — `kmalloc`: watch `ksize()` diverge from the request
 
-```gdb
-(gdb) break allocate_store
-(gdb) continue
+**Pane: gdb**
+
 ```
+break allocate_store
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 echo "kmalloc 100" | tee /sys/kernel/kernel_memory/allocate
 ```
-```gdb
-Thread 2 hit Breakpoint N, allocate_store (...) at kernel_memory.c:207
-(gdb) next    # past the kbuf copy, strim(), strchr() split
-(gdb) print cmd
+
+**Pane: gdb**
+
+```
+Thread 2 hit Breakpoint 2, allocate_store (...) at kernel_memory.c:207
+```
+```
+next
+```
+```
+print cmd
+```
+```
 $1 = 0x... "kmalloc"
-(gdb) next     # kstrtoul(strim(size_str), 0, &size)
-(gdb) print size
+```
+```
+next
+```
+```
+print size
+```
+```
 $2 = 100
-(gdb) next      # do_allocate(type, size) - inlined, `next` walks straight into its body
-(gdb) next       # ptr = kmalloc(size, GFP_KERNEL)
-(gdb) print ptr
+```
+```
+next
+```
+```
+next
+```
+```
+print ptr
+```
+```
 $3 = (void *) 0xffff...
 ```
 
-This address is a real, mapped kernel address you could in principle
-`x/100xb` right now (it's freshly `kmalloc()`'d, uninitialized —
-don't expect meaningful bytes, just confirm it's readable and doesn't
-fault, unlike module 10's raw userspace `argp`).
+This address is a real, mapped kernel address (freshly `kmalloc()`'d,
+uninitialized — don't expect meaningful bytes, just confirm it's
+readable and doesn't fault, unlike module 10's raw userspace `argp`).
 
-```gdb
-(gdb) next    # cur_actual_size = ksize(ptr)  - only for ALLOC_KMALLOC
-(gdb) print cur_actual_size
+```
+next
+```
+```
+print cur_actual_size
+```
+```
 $4 = 128
 ```
 
 **128, not 100.** You asked for 100 bytes; `kmalloc()`'s slab allocator
-only hands out from a fixed set of bucket sizes, and rounds your
-request up to the next one — `ksize()` reports the bucket's real
-capacity, which is what you actually got, not what you asked for. This
-is directly why a driver that needs to know its *actual* usable
-allocation size (rather than just the size it requested) calls
-`ksize()` explicitly rather than assuming they're the same number.
+only hands out from a fixed set of bucket sizes, and rounds your request
+up to the next one — `ksize()` reports the bucket's real capacity, which
+is what you actually got. This is directly why a driver that needs to
+know its *actual* usable allocation size calls `ksize()` explicitly
+rather than assuming it matches the request.
 
-```gdb
-(gdb) finish
 ```
+finish
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 cat /sys/kernel/kernel_memory/info
 ```
 
-### Step 3 — free it, then `vmalloc` the same nominal size
+## Step 6 — free it, then `vmalloc` the same nominal size
 
-```gdb
-(gdb) break do_free
+**Pane: gdb**
+
 ```
-Wait — `do_free()` is a real, standalone symbol (unlike `do_allocate`)
-— confirm before relying on it:
+break do_free
 ```
-$ gdb -q -batch -nx -ex "file kernel_memory.ko" -ex "info line do_free" kernel_memory.ko
-Line 145 of "kernel_memory.c" starts at address 0x1a8 <do_free> ...
 ```
-```gdb
-(gdb) continue
+continue
 ```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 echo 1 | tee /sys/kernel/kernel_memory/free
 ```
-```gdb
-Thread 2 hit Breakpoint N, do_free () at kernel_memory.c:145
-(gdb) next   # type = cur_type; ptr = cur_ptr;
-(gdb) print type
+
+**Pane: gdb**
+
+```
+Thread 2 hit Breakpoint 3, do_free () at kernel_memory.c:145
+```
+```
+next
+```
+```
+print type
+```
+```
 $5 = ALLOC_KMALLOC
-(gdb) next    # kfree(ptr) via the switch
-(gdb) finish
+```
+```
+next
+```
+```
+finish
+```
+```
+delete
+```
+```
+y
+```
+```
+break allocate_store
+```
+```
+continue
 ```
 
-```gdb
-(gdb) delete <the do_free breakpoint's number — `info breakpoints` if unsure>
-(gdb) break allocate_store
-(gdb) continue
-```
-
-(Bare `delete` with no argument deletes *every* breakpoint, but first
-asks `Delete all breakpoints? (y or n)` — if you're typing ahead, that
-prompt can silently swallow your next command instead of actually
-deleting anything. Naming the number skips the prompt; same reasoning
-applies to every `delete` in the rest of this walkthrough.)
+**Pane: vmb**
 
 ```bash
-# vmb:
 echo "vmalloc 100" | tee /sys/kernel/kernel_memory/allocate
 ```
-```gdb
-(gdb) next
-(gdb) next
-(gdb) next
-(gdb) print ptr
-$6 = (void *) 0xffffa...    # a very different-looking address range than the kmalloc one
+
+**Pane: gdb**
+
+```
+next
+```
+```
+next
+```
+```
+next
+```
+```
+print ptr
+```
+```
+$6 = (void *) 0xffffa...
 ```
 
-Compare this address against step 2's `kmalloc` pointer — on `arm64`
+Compare this address against step 5's `kmalloc` pointer — on `arm64`
 (and most architectures), `vmalloc()`'s return lives in a visibly
-different virtual address range than the slab allocator's, because
-it's mapped through its own dedicated page tables rather than the
-kernel's direct physical-memory mapping. `cur_actual_size` for this
-branch is simply `size` unchanged (100, not rounded) — check the
-source's own `do_allocate()`: `cur_actual_size = (type ==
-ALLOC_KMALLOC) ? ksize(ptr) : size;` — `ksize()` is only meaningful for
-`kmalloc`'s bucket-based allocations; `vmalloc`'s size is exactly what
-you asked for because it isn't drawing from fixed-size buckets at all.
+different virtual address range than the slab allocator's, because it's
+mapped through its own dedicated page tables rather than the kernel's
+direct physical-memory mapping. `cur_actual_size` for this branch is
+simply `size` unchanged (100, not rounded) — the source's own
+`do_allocate()` has `cur_actual_size = (type == ALLOC_KMALLOC) ?
+ksize(ptr) : size;` — `ksize()` is only meaningful for `kmalloc`'s
+bucket-based allocations.
 
-### Step 4 — the fixed-size cache
+## Step 7 — the fixed-size cache
 
-```gdb
-(gdb) delete <the allocate_store breakpoint's number>
-(gdb) break allocate_store
-(gdb) continue
+**Pane: gdb**
+
+```
+delete
+```
+```
+y
+```
+```
+break allocate_store
+```
+```
+continue
+```
+
+**Pane: vmb**
+
+```bash
+echo 1 | tee /sys/kernel/kernel_memory/free
 ```
 ```bash
-# vmb:
-echo 1 | tee /sys/kernel/kernel_memory/free
 echo "cache 999" | tee /sys/kernel/kernel_memory/allocate
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 2 hit Breakpoint N, allocate_store (...) at kernel_memory.c:207
-(gdb) next
-(gdb) print size
+```
+```
+next
+```
+```
+print size
+```
+```
 $7 = 999
-(gdb) next
+```
+```
+next
+```
+```
+next
+```
+```
+print size
+```
+```
+$8 = 128
 ```
 
-Step into the inlined `do_allocate()`'s own body and watch the size get
-overridden before the allocation call even happens:
+`CACHE_OBJ_SIZE` — your requested `999` was silently ignored. The sysfs
+interface accepted `"cache 999"` without error, but the cache allocator
+only ever hands out objects of the one fixed size it was created with
+(`kmem_cache_create("kernel_memory_demo", CACHE_OBJ_SIZE, ...)` at
+init) — the size argument is meaningless for this branch, and watching
+it get overwritten mid-function is a more convincing demonstration of
+that than reading the `switch` statement.
 
-```gdb
-(gdb) next    # `if (type == ALLOC_CACHE) size = CACHE_OBJ_SIZE;`
-(gdb) print size
-$8 = 128    # CACHE_OBJ_SIZE - your requested 999 was silently ignored
+## Step 8 — `-EBUSY`: only one allocation tracked at a time
+
+**Pane: gdb**
+
+```
+continue
 ```
 
-The sysfs interface accepted `"cache 999"` without error, but the
-cache allocator only ever hands out objects of the one fixed size it
-was created with (`kmem_cache_create("kernel_memory_demo",
-CACHE_OBJ_SIZE, ...)` at init) — the size argument is meaningless for
-this branch, and watching it get overwritten mid-function is a more
-convincing demonstration of that than reading the `switch` statement.
+**Pane: vmb** (don't free first this time)
 
-### Step 5 — `-EBUSY`: only one allocation tracked at a time
-
-```gdb
-(gdb) continue
-```
-Don't `free` first this time:
 ```bash
-# vmb:
 echo "kmalloc 50" | tee /sys/kernel/kernel_memory/allocate
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 2 hit Breakpoint N, allocate_store (...) at kernel_memory.c:207
-(gdb) next
-(gdb) next
-(gdb) next    # into do_allocate - the `if (cur_type != ALLOC_NONE)` guard fires immediately
-(gdb) finish
 ```
+```
+next
+```
+```
+next
+```
+```
+next
+```
+```
+finish
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 echo "kmalloc 50" | tee /sys/kernel/kernel_memory/allocate
-# tee: write error: Device or resource busy
+```
+```
+tee: write error: Device or resource busy
 ```
 
-### Step 6 — `stats`: cumulative counters across everything above
+## Step 9 — `stats`: cumulative counters across everything above
 
-```gdb
-(gdb) delete <the allocate_store breakpoint's number>
-(gdb) break stats_show
-(gdb) continue
+**Pane: gdb**
+
 ```
+delete
+```
+```
+y
+```
+```
+break stats_show
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 cat /sys/kernel/kernel_memory/stats
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 2 hit Breakpoint N, stats_show (...) at kernel_memory.c:294
-(gdb) finish
 ```
+```
+finish
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 cat /sys/kernel/kernel_memory/stats
 ```
-`alloc_ok` should read 3 (the kmalloc, vmalloc, and cache allocations
-from steps 2–4), `alloc_fail` should include the `-EBUSY` rejection
-from step 5 — **or not**, depending on whether you consider `-EBUSY`
-an allocation "failure" at all; check `do_allocate()`'s own source
-again: the `EBUSY` early-return happens *before* `stats_alloc_fail++`
+
+`alloc_ok` should read `3` (the kmalloc, vmalloc, and cache allocations
+from steps 5–7); whether `alloc_fail` includes step 8's `-EBUSY`
+rejection depends on the driver's own accounting — check `do_allocate()`'s
+source: the `EBUSY` early-return happens *before* `stats_alloc_fail++`
 is ever reached, so it counts toward neither `alloc_ok` nor
-`alloc_fail` — a real, slightly surprising fact about this driver's
-own accounting, worth confirming by stepping through it exactly as
-step 5 did rather than assuming from the field name alone.
+`alloc_fail`, a real, slightly surprising fact worth confirming by
+stepping through it exactly as step 8 did rather than assuming from the
+field name alone.
 
-## Cleanup
+## Step 10 — the exit path
 
-**`break kernel_memory_exit` does not work if you try it directly —
-confirmed live.** `kernel_memory_exit` is marked `__exit`, placing it
-in its own ELF section, `.exit.text`, which `lx-symbols` never
-relocates (its hardcoded section list in `scripts/gdb/linux/symbols.py`
-doesn't include `.init.text`/`.exit.text`). The breakpoint silently
-resolves to a raw, unrelocated file offset instead of a real address —
-no error, it just never fires. This affects every module in this repo
-using the modern `module_exit()` macro (every module except 01).
+`kernel_memory_exit` is marked `__exit`, placed in its own `.exit.text`
+section, which `lx-symbols` never relocates — `break kernel_memory_exit`
+right now would silently resolve to a raw, unrelocated file offset.
+Break on the generic unload hook instead:
 
-**The fix, verified live** — break on the generic kernel hook that
-calls into every module's exit function, then read the real address
-out of the kernel's own struct:
+**Pane: gdb**
 
-```gdb
-(gdb) delete <the stats_show breakpoint's number>
-(gdb) break __do_sys_delete_module
-(gdb) continue
 ```
+delete
+```
+```
+y
+```
+```
+break __do_sys_delete_module
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 rmmod kernel_memory
 ```
-```gdb
-(gdb) advance kernel/module/main.c:863
-(gdb) print mod->exit
-$N = (void (*)(void)) 0xffff80007c3207f8
+
+**Pane: gdb**
+
+```
+advance kernel/module/main.c:863
+```
+```
+print mod->exit
+```
+```
+$9 = (void (*)(void)) 0xffff80007c3207f8
 ```
 
-(That address is from one real run and won't match yours — module
-memory placement is random per boot regardless of `nokaslr`. Always use
-whatever `print mod->exit` gives you right now.) **Do not `step` into
-it from here** — with no relocated line table GDB can't bound the
-function and `step` free-runs straight past it; `Ctrl-C` recovers you.
-Register the section the way `lx-symbols` does for the sections it
-already knows about, and the normal breakpoint then resolves cleanly:
+(Your address will differ — module memory placement is random per boot
+even with `nokaslr`.)
 
-```gdb
-(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/13_kernel_memory/kernel_memory.ko -s .exit.text 0xffff80007c3207f8
-(gdb) break kernel_memory_exit
-Breakpoint N at 0xffff80007c3207f8: file kernel_memory.c, line 353.
-(gdb) delete <the __do_sys_delete_module breakpoint's number>
-(gdb) continue
 ```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/13_kernel_memory/kernel_memory.ko -s .exit.text 0xffff80007c3207f8
+```
+```
+y
+```
+```
+break kernel_memory_exit
+```
+```
+Breakpoint N at 0xffff80007c3207f8: file kernel_memory.c, line 353. (2 locations)
+```
+```
+disable N.1
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 rmmod kernel_memory
 ```
-```gdb
-Thread N hit Breakpoint N, kernel_memory_exit () at kernel_memory.c:353
+
+**Pane: gdb**
+
+```
+Thread N hit Breakpoint N.2, kernel_memory_exit () at kernel_memory.c:353
 353		if (cur_type != ALLOC_NONE) {
-(gdb) next   # the safety-net free on unload
+```
+```
+next
+```
+```
+print cur_type
 ```
 
-If you left an allocation live (step 4's cache object, most likely, if
+If you left an allocation live (step 7's cache object, most likely, if
 you followed the steps above in order without an extra manual free),
-this branch fires and calls `do_free()` for you — confirm directly:
+this branch fires and calls `do_free()` for you — this is the driver's
+own safety-net free on unload. If you already freed everything manually,
+`cur_type` reads `ALLOC_NONE` and the branch is skipped.
 
-```gdb
-(gdb) print cur_type
+## Step 11 — clean up
+
+**Pane: gdb**
+
+```
+continue
+```
+```
+delete
+```
+```
+y
 ```
 
-If this reads anything other than `ALLOC_NONE`, you're about to watch
-the defensive cleanup path run; if you already freed everything
-manually, this branch is skipped and `cur_type` reads `ALLOC_NONE`
-already.
+**Pane: vmb**
 
-```gdb
-(gdb) continue
-```
 ```bash
-# vmb:
 poweroff -f
 ```
+
+**Pane: gdb**
+
+```
+quit
+```
+
+---
 
 ## What this proves
 
 Three allocators that all "just return a pointer" from the call site
-alone produce pointers with genuinely different addresses, different
-actual-vs-requested size behavior, and different failure semantics —
-none of which is visible without actually inspecting what came back.
-`ksize()` only meaning something for `kmalloc`, and a fixed-size cache
-silently discarding a requested size that doesn't match its own
-configuration, are the kind of detail a driver author has to know
-cold; stepping through both live is a faster way to internalize them
-than reading `include/linux/slab.h`'s comments alone.
+alone produce pointers with genuinely different addresses (step 6),
+different actual-vs-requested size behavior (`ksize()` meaning something
+for `kmalloc` and nothing for the other two — steps 5–7), and different
+failure semantics (step 8) — none of which is visible without actually
+inspecting what came back. Stepping through all three live is a faster
+way to internalize this than reading `include/linux/slab.h`'s comments
+alone.

@@ -138,63 +138,11 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). Break on both
-callbacks and read their execution context directly out of the running
-kernel, rather than trusting the `format_ctx()` string the driver builds
-for you:
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break heartbeat_timer_fn
-(gdb) continue
-```
-```gdb
-(gdb) finish            # let format_ctx() run, then...
-(gdb) print ctx          # "in_softirq=1 in_task=0 ..." - see it for yourself, not just in sysfs
-(gdb) break heartbeat_work_fn
-(gdb) continue
-(gdb) finish
-(gdb) print ctx           # "in_softirq=0 in_task=1 comm=kworker/..."
-```
-
-Since `might_sleep()` is a debug *check*, not a breakpoint-worthy event
-on its own, the more direct way to feel the context difference is
-`step`-ing into `usleep_range()` from `heartbeat_work_fn` (it actually
-descends into scheduler code — `bt` will show real sleep/wake frames)
-versus trying the same `step` on `might_sleep()` in the timer path
-(nothing to descend into on a kernel without
-`CONFIG_DEBUG_ATOMIC_SLEEP`, confirming the "harmless no-op" claim from
-this module's README empirically instead of by assertion).
-
-**`format_ctx`/init/exit**, verified — `format_ctx` resolves as its own
-symbol here (unlike similarly-small helpers elsewhere in this repo that
-got inlined):
-
-```bash
-$ gdb -q -batch -nx -ex "file timers_workqueues.ko" \
-    -ex "info line format_ctx" -ex "info line timers_workqueues_init" \
-    -ex "info line timers_workqueues_exit" timers_workqueues.ko
-Line 61 ... <format_ctx> ...
-Line 166 ... <timers_workqueues_init> ...
-Line 195 ... <timers_workqueues_exit> ...
-```
-
-`break format_ctx`, `continue`, and let it hit naturally from either
-callback — `print in_softirq()`, `print in_task()`, `print
-preemptible()` *at the exact same breakpoint*, called from two different
-contexts on two different hits, is the single clearest way to see this
-module's whole point: identical code, radically different answers depending
-on who called it. `bt` immediately after hitting `format_ctx` shows
-which of the two callbacks you're inside without needing to check
-anything else.
-
-`break timers_workqueues_exit`, `rmmod`, and step through
-`timer_shutdown_sync(&heartbeat_timer)` followed by
-`cancel_delayed_work_sync(&heartbeat_work)` — two different
-"wait for any in-flight callback and guarantee no more will run"
-primitives, one per mechanism, called back to back.
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). Breaks on both the timer and
+workqueue callbacks and reads `in_softirq()`/`in_task()`/`preemptible()`
+directly out of the running kernel at each stop, live proof of the
+context difference this module's whole point rests on.
 

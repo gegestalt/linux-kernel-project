@@ -148,72 +148,11 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md).
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) lx-ps                     # find "kthread_demo_producer" and its pid before you break anything
-(gdb) break producer_thread_fn
-(gdb) continue
-```
-
-At the breakpoint: `print current->pid` should match what `lx-ps`
-already showed you, and `print current->comm` reads
-`kthread_demo_producer` — a real, schedulable task, unlike module 14's
-timer callback. `next` through one loop iteration to watch
-`ring[ring_head]` get written and `ring_head`/`ring_count` update, then
-`step` into `msleep_interruptible()` (it genuinely descends into
-scheduler code, confirming this thread can sleep) and `lx-ps` again
-while it's asleep in there — you should see its state change from
-running to interruptible sleep.
-
-To watch the cooperative-shutdown path specifically:
-`break kthread_should_stop` (a tiny inline-ish helper, but resolvable
-once `lx-symbols` has loaded), `continue`, then from the guest
-`echo stop | sudo tee /sys/kernel/kthreads_demo/control` — you'll land
-here on the very next loop check after `kthread_stop()` wakes the
-thread, before it actually returns from `producer_thread_fn()`.
-
-**`start_producer`/`stop_producer`/`control_store`/init/exit**, all
-verified:
-
-```bash
-$ gdb -q -batch -nx -ex "file kthreads.ko" \
-    -ex "info line start_producer" -ex "info line stop_producer" \
-    -ex "info line control_store" -ex "info line kthreads_init" \
-    -ex "info line kthreads_exit" kthreads.ko
-Line 100 ... <start_producer> ...
-Line 122 ... <stop_producer> ...
-Line 229 ... <control_store> ...
-Line 270 ... <kthreads_init> ...
-Line 306 ... <kthreads_exit> ...
-```
-
-```gdb
-(gdb) break start_producer
-(gdb) continue
-```
-```bash
-echo start | sudo tee /sys/kernel/kthreads_demo/control
-```
-```gdb
-(gdb) print producer_task          # NULL - about to be created
-(gdb) next                          # kthread_run() itself
-(gdb) print producer_task            # a real struct task_struct * now
-(gdb) print producer_task->pid         # matches what /sys/kernel/kthreads_demo/status reports next
-(gdb) finish
-```
-
-`break stop_producer`, trigger with `echo stop | sudo tee
-/sys/kernel/kthreads_demo/control`, and step through: `producer_task` is
-copied to a local and the global set to `NULL` **before**
-`kthread_stop()` is even called — `print producer_task` right after that
-`next` already shows `NULL`, even though the thread is still running and
-will be for a few more lines. Worth pausing on: this ordering means a
-second `stop` request racing in couldn't get a stale pointer,
-independent of anything `kthread_stop()` itself does.
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). Finds the producer thread
+with `lx-ps`, breaks inside its loop body while `current` stays the same
+PID across every iteration, and watches `kthread_stop()`'s
+flag-then-wake shutdown protocol interrupt a real sleep.
 

@@ -111,71 +111,11 @@ make clean         # also removes the cdev_test binary
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). This module's whole
-point is the `dup()`/reference-counting behavior, which is exactly the
-kind of thing worth pausing mid-execution to actually see rather than
-inferring from log lines:
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break my_open
-(gdb) break my_release
-(gdb) continue
-```
-```bash
-./cdev_test /dev/open_release_cdev0
-```
-
-At the `my_open` breakpoint: `next` past the `kzalloc()`, `print ctx`
-(your freshly allocated `struct open_context`), `next` again and
-`print active_opens` before vs. after the `atomic_inc_return()` line.
-For the `dup()` test specifically, stop at `my_release` and `print
-ctx->id` — confirm you only ever break here **once** for the pair of
-descriptors `test.c` duplicates, no matter how many times you'd expect
-"a close" to trigger it. `bt` at that breakpoint also shows the real VFS
-call chain (`__fput` → `...→ my_release`) rather than a raw `close()`.
-
-`ptype struct open_context` (verified: `id`, `opened_ns`, `minor`,
-`flags`, `mode`, `opener_pid`, `opener_comm[16]`) is worth running once
-so `print *ctx` at any `my_open`/`my_release` breakpoint means something
-— every field in it is something this driver captured *at open time*
-and is still reading back at release, which is the entire mechanism
-`filp->private_data` exists for.
-
-**`open_release_cdev_init`/`open_release_cdev_exit`**, both verified:
-
-```bash
-$ gdb -q -batch -nx -ex "file open_release_cdev.ko" \
-    -ex "info line open_release_cdev_init" -ex "info line open_release_cdev_exit" \
-    open_release_cdev.ko
-Line 172 of "open_release_cdev.c" starts at address 0xb90 <open_release_cdev_init> ...
-Line 189 of "open_release_cdev.c" starts at address 0xc50 <open_release_cdev_exit> ...
-```
-
-```gdb
-(gdb) break do_init_module
-(gdb) continue
-```
-```bash
-sudo insmod ./open_release_cdev.ko
-```
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break open_release_cdev_init
-(gdb) continue
-(gdb) next        # register_chrdev(0, DEVICE_NAME, &fops)
-(gdb) print major
-(gdb) finish
-```
-
-At `open_release_cdev_exit` (break on it directly — it already exists
-once the module is loaded, no catch-all needed), `print active_opens`
-and `print next_open_id` before `unregister_chrdev()` runs — this is
-the exact pair of numbers this module's own `dmesg` exit log reports
-(`active_opens=... total_open_calls=...`), now readable straight out of
-the `atomic_t`/`atomic64_t` globals instead of parsing a log line.
+Fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). This module's whole point is
+the `dup()`/reference-counting behavior, which is exactly the kind of
+thing worth pausing mid-execution to actually see rather than inferring
+from log lines.
 

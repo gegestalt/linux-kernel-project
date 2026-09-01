@@ -167,67 +167,10 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). Break on both sides
-of the producer/consumer pair to see the context difference this module
-is built around, directly rather than inferred from the `comm=`/`in_*=`
-fields the driver itself logs:
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break producer_fn
-(gdb) continue
-```
-
-When it hits (the timer firing): `print $lx_current()->comm` — note
-it's whatever task happened to be running, *not* a thread belonging to
-this driver. `bt` shows a softirq call chain
-(`run_timer_softirq`/`__softirqentry_text_start`-ish frames) rather than
-a syscall entry.
-
-```gdb
-(gdb) break bq_read
-(gdb) continue
-```
-```bash
-cat /dev/blocking_demo &
-```
-
-This time `print $lx_current()->comm` shows `cat`, and `bt` shows a real
-syscall chain (`ksys_read` → `vfs_read` → `bq_read`). Step through the
-`atomic_xchg(&data_ready, 0)` line with `next` and `print` its return
-value before deciding whether the loop `break`s out or calls
-`wait_event_interruptible()` — the exact check-and-clear moment the
-thundering-herd fix in this module's README depends on.
-
-**`bq_poll`/`trigger_store`/init/exit**, verified:
-
-```bash
-$ gdb -q -batch -nx -ex "file wait_queues_blocking.ko" \
-    -ex "info line bq_poll" -ex "info line trigger_store" \
-    -ex "info line wait_queues_blocking_init" -ex "info line wait_queues_blocking_exit" \
-    wait_queues_blocking.ko
-Line 114 ... <bq_poll> ...
-Line 162 ... <trigger_store> ...
-Line 187 ... <wait_queues_blocking_init> ...
-Line 222 ... <wait_queues_blocking_exit> ...
-```
-
-`break bq_poll`, then drive a `select()`/`poll()` from a Python
-one-liner against `/dev/blocking_demo` (this module's own README has one)
-— `next` through `poll_wait()` and watch `atomic_read(&data_ready)`
-decide the return value, the exact mechanism that makes `select()`
-return "readable" at the right moment without the caller ever calling
-`read()` first.
-
-`break wait_queues_blocking_exit`, `rmmod`, and step through in order:
-`timer_shutdown_sync(&producer_timer)` first, *then* the defensive
-`wake_up_interruptible_all()` this module's own source comments explain is
-mostly unreachable in practice (module refcounting via `fops.owner`
-already prevents `rmmod` while a reader is blocked) — `print
-$lx_current()->comm` here will always read `rmmod`, never a reader,
-confirming that comment empirically.
-
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). Breaks on both sides of the
+producer/consumer pair (the timer callback in softirq context vs. a
+reader genuinely parked on the wait queue with `TASK_INTERRUPTIBLE`
+state), and walks the exit path's `timer_shutdown_sync()` ordering.
