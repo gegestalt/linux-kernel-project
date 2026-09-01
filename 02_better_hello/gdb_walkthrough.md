@@ -81,9 +81,10 @@ sudo umount /tmp/vmb-mnt
 
 ## tmux layout
 
-Same two sessions as every module — `vmb` (guest) and `gdbsess` (GDB) —
-see [`../gdb_debugging.md`](../gdb_debugging.md). `target remote
-:1234` then `lx-version` first, always.
+Same `vmb` (guest) + `gdb` panes, inside the `kgdb` tmux session, as
+every module — see [`../gdb_debugging.md`](../gdb_debugging.md). `target
+remote :1234` then `lx-version` first, always. **One gdb command per
+paste, always** — see that doc's third gotcha rule.
 
 ## The walkthrough
 

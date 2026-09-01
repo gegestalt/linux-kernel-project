@@ -26,7 +26,7 @@ sudo umount /tmp/vmb-mnt
 
 ## tmux layout
 
-Standard `vmb` + `gdbsess` — [`../gdb_debugging.md`](../gdb_debugging.md).
+Standard `vmb` + `gdb` panes inside the `kgdb` tmux session — see [`../gdb_debugging.md`](../gdb_debugging.md). **One gdb command per paste, always** — a multi-line paste can get merged into one bogus command instead of running one line per Enter (that doc's third gotcha rule).
 You'll want a **third** way to interact with the guest for step 2 — a
 second shell inside the guest is easiest if your busybox setup
 supports it (a second `getty`, or just running the blocking `cat` with
@@ -290,7 +290,7 @@ source — the misc device's own kobject — which is why this lives under
 `/sys/class/misc/race_demo/mode` uses, rather than under
 `/sys/kernel/...` the way modules 13–16's bare-kobject drivers do.)
 
-**Don't type anything new into the `gdbsess` pane for this step — just
+**Don't type anything new into the `gdb` pane for this step — just
 look at it.** The `next` you issued at the end of step 2 (on the
 `wait_event_interruptible(...)` line) is still pending: `bq_read` never
 returned to GDB's prompt, because that `next` is what's been sitting
@@ -301,7 +301,7 @@ re-triggered. As soon as `wake_up_interruptible(&event_wq)` (called
 from `trigger_store`, or from the next `producer_fn` tick if you didn't
 beat the timer to it) makes the wait condition true, that outstanding
 `next` simply completes on its own and GDB prints its result — switch
-back to the `gdbsess` pane and it should already be sitting there:
+back to the `gdb` pane and it should already be sitting there:
 
 ```gdb
 77          char kbuf[64];

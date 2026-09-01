@@ -71,8 +71,7 @@ by this lab's own `make`, so it has to be copied from
 
 ## tmux layout
 
-Standard `vmb` + `gdbsess` pair, see
-[`../gdb_debugging.md`](../gdb_debugging.md). `target remote :1234`,
+Standard `vmb` + `gdb` panes inside the `kgdb` tmux session — see [`../gdb_debugging.md`](../gdb_debugging.md). **One gdb command per paste, always** — a multi-line paste can get merged into one bogus command instead of running one line per Enter (that doc's third gotcha rule). `target remote :1234`,
 `lx-version`, then break `do_init_module` and `insmod` as in every
 earlier module to get `lx-symbols` to see this one. This walkthrough
 picks up from there.
