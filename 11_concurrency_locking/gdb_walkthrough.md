@@ -35,7 +35,7 @@ at the same time would be nearly impossible to reason about together.
 
 ## tmux layout
 
-Standard `vmb` + `gdbsess` — [`../gdb_debugging.md`](../gdb_debugging.md).
+Standard `vmb` + `gdb` panes inside the `kgdb` tmux session — see [`../gdb_debugging.md`](../gdb_debugging.md). **One gdb command per paste, always** — a multi-line paste can get merged into one bogus command instead of running one line per Enter (that doc's third gotcha rule).
 
 ## Real, verified breakpoint targets
 

@@ -42,15 +42,17 @@ sudo umount /tmp/vmb-mnt
 
 ## tmux layout
 
-Two tmux sessions, per the main guide: `vmb` (the QEMU guest's serial
-console) and `gdbsess` (GDB, running on this machine, never freezes).
-Boot the guest and start GDB exactly as shown in
-[`../gdb_debugging.md`](../gdb_debugging.md#boot-the-guest-one-tmux-pane-and-attach-gdb-another) —
+One tmux session, two panes, per the main guide: `vmb` (left, the QEMU
+guest's serial console) and `gdb` (right, GDB, running on this machine,
+never freezes). Set the `kgdb` session up once as shown in
+[`../gdb_debugging.md`](../gdb_debugging.md#tmux-layout-set-this-up-once-reuse-for-every-module),
+then boot the guest and start GDB exactly as shown right after that —
 including `nokaslr` on the kernel command line and `gdb -q -iex 'set
-auto-load safe-path /' vmlinux`. Attach to each with `tmux attach -t
-vmb` / `tmux attach -t gdbsess` in two terminals (or two tmux clients),
-and switch between them — don't type gdb commands into the vmb pane or
-vice versa.
+auto-load safe-path /' vmlinux`. Click (mouse is on) or `Ctrl-b` +
+arrow to switch panes — don't type gdb commands into the `vmb` pane or
+vice versa, and paste exactly one gdb command at a time (that doc's
+third gotcha rule — a multi-line paste can get merged into one bogus
+command instead of running one line per Enter).
 
 ## The walkthrough
 
@@ -184,7 +186,7 @@ In `vmb`:
 rmmod hello
 ```
 
-Back in `gdbsess`:
+Back in `gdb`:
 
 ```
 Thread 2 hit Breakpoint 3, cleanup_module () at hello.c:20
@@ -217,10 +219,13 @@ to build now, before it costs you a confusing session later.)
 # in vmb:
 poweroff -f
 ```
+
+That's enough between modules — reboot the guest fresh for the next
+one, no need to tear the tmux session down each time. Only kill it if
+you're done for the day:
+
 ```bash
-# in gdbsess, or a fresh shell:
-tmux kill-session -t vmb
-tmux kill-session -t gdbsess
+tmux kill-session -t kgdb
 ```
 
 ## What this proves
