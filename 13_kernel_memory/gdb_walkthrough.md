@@ -44,7 +44,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 13_kernel_memory
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/13_kernel_memory
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 ```bash

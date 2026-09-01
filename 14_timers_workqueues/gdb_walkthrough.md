@@ -36,7 +36,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 14_timers_workqueues
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/14_timers_workqueues
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

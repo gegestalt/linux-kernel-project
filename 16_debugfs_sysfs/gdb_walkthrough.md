@@ -45,7 +45,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 16_debugfs_sysfs
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/16_debugfs_sysfs
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 

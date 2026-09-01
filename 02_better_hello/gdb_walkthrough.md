@@ -34,7 +34,7 @@ Two panes now: **vmb** (left) and **gdb** (right).
 *Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
-cd 02_better_hello
+cd /home/adiopocere/Desktop/codes/linux-kernel-project/02_better_hello
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
 ```
 
