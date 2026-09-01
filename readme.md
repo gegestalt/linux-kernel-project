@@ -1,8 +1,11 @@
 # linux-kernel-project
 
-Hands-on Linux kernel module development, modules 01 through 16, each one
+Hands-on Linux kernel module development, modules 01 through 17, each one
 isolating a new concept on top of the ones before it. Go through them in
 order the first time; after that it's a reference you jump back into.
+Module 17 is the exception to the strict ordering — it's a deliberate
+return to module 04's topic (module parameters) once there's more
+context to make a genuinely complex example land.
 
 ## Where to find things
 
