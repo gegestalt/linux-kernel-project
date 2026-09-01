@@ -132,16 +132,80 @@ Thread 2 hit Breakpoint 1, do_init_module (mod=mod@entry=0x...) at kernel/module
 ```
 lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 ```
+
+**`break module_params_init` does not work here — confirmed live twice,
+don't trust it.** `module_params_init` is `__init`, placed in
+`.init.text`. `lx-symbols` relocates only a fixed, hardcoded list of
+sections (`scripts/gdb/linux/symbols.py`'s `_section_arguments()`:
+`.data`, `.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`,
+`.text.unlikely`) — `.init.text` isn't one of them, the exact same root
+cause already documented for `.exit.text` below in step 12, just hitting
+the *load* path instead of the unload path this time. `break
+module_params_init` right now would be accepted with no error and
+silently resolve to a tiny, bogus, unrelocated file offset — confirmed
+live, this exact module: `0xd8`, nowhere near a real `0xffff8000...`
+kernel address — it would never actually fire; `insmod` would run
+straight through to completion with nothing caught.
+
+The fix mirrors step 12's exit-path fix exactly, using `mod->init`
+instead of `mod->exit` — you're still stopped inside `do_init_module`
+right now, before `do_one_initcall(mod->init)` has run, so `mod->init`
+is already the module's real, live init-function address:
+
+```
+print mod->init
+```
+```
+$1 = (int (*)(void)) 0xffff80007c328068
+```
+
+(That address is from one real, live-verified run — module memory
+placement is random per boot even with `nokaslr`. Use whatever `print
+mod->init` gives you next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/04_module_params/module_params.ko -s .init.text 0xffff80007c328068
+```
+```
+y
+```
 ```
 break module_params_init
+```
+```
+Breakpoint 2 at 0xd8: module_params_init. (2 locations)
+```
+
+Two locations — `2.1` is the same old broken raw-offset one (`0xd8`,
+matching what plain `break module_params_init` gave a moment ago —
+confirming it really is the identical bogus address, not a new one),
+`2.2` is the newly-relocated real one:
+
+```
+info breakpoints
+```
+```
+2.1                         y   0x00000000000000d8 in module_params_init at module_params.c:147
+2.2                         y   0xffff80007c328078 <init_module+8>
+```
+
+```
+disable 2.1
 ```
 ```
 continue
 ```
 ```
-Thread 2 hit Breakpoint 2, module_params_init () at module_params.c:147
-147     char primes_buf[32];
+Thread 2 hit Breakpoint 2.2, 0xffff80007c328078 in init_module ()
 ```
+
+Reports as `init_module`, not `module_params_init` — the same alias
+mechanics documented in module 02's walkthrough (`module_init()`
+generates a hard alias to the legacy name; both point at the identical
+address, GDB just picked one label for this particular PC). Confirmed
+live past this point too — `print greeting` here correctly reads back
+whatever value `insmod` was given, before `module_params_init`'s own
+body has executed a line.
 
 ## Step 9 — print the parameters before the function has run a single line
 
@@ -151,37 +215,37 @@ Thread 2 hit Breakpoint 2, module_params_init () at module_params.c:147
 print greeting
 ```
 ```
-$1 = 0x... "hi from gdb"
+$2 = 0x... "hi from gdb"
 ```
 ```
 print repeat_count
 ```
 ```
-$2 = 3
+$3 = 3
 ```
 ```
 print verbose
 ```
 ```
-$3 = true
+$4 = true
 ```
 ```
 print dbg_level
 ```
 ```
-$4 = 5
+$5 = 5
 ```
 ```
 print primes
 ```
 ```
-$5 = {11, 13, 17, 7}
+$6 = {11, 13, 17, 7}
 ```
 ```
 print primes_count
 ```
 ```
-$6 = 3
+$7 = 3
 ```
 
 **What this shows:** none of `module_params_init`'s own body has run
@@ -259,7 +323,7 @@ next
 print reps
 ```
 ```
-$7 = 3
+$8 = 3
 ```
 
 Leave this breakpoint stopped here — GDB, and the whole guest, is frozen
@@ -290,7 +354,7 @@ next
 print reps
 ```
 ```
-$8 = 8
+$9 = 8
 ```
 
 **What this shows:** the value changed from a completely separate shell
@@ -305,7 +369,7 @@ next
 print reps
 ```
 ```
-$9 = 8
+$10 = 8
 ```
 
 `MAX_REPEAT` is 8 in this source, so 8 isn't clamped. Try writing `20`
@@ -355,7 +419,7 @@ advance kernel/module/main.c:863
 print mod->exit
 ```
 ```
-$10 = (void (*)(void)) 0xffff80007c32b3c8
+$11 = (void (*)(void)) 0xffff80007c32b3c8
 ```
 
 (That address is from one real run — module memory placement is random

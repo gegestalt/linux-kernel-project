@@ -120,18 +120,79 @@ lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
 ```
 
 Symbols are loaded but `debugfs_sysfs_init()` hasn't run yet — `insmod`
-is still parked in `do_init_module`. Break on it now and step through the
-one design decision this module's own source comment calls out:
+is still parked in `do_init_module`.
+
+**`break debugfs_sysfs_init` does not work here — confirmed live in
+other modules' identical situation, don't trust it.**
+`debugfs_sysfs_init` is `__init`, placed in `.init.text`. `lx-symbols`
+relocates only a fixed, hardcoded list of sections
+(`scripts/gdb/linux/symbols.py`'s `_section_arguments()`: `.data`,
+`.data..read_mostly`, `.rodata`, `.bss`, `.text.hot`, `.text.unlikely`)
+— `.init.text` isn't one of them, the same root cause documented for
+`.exit.text` on the unload path (module 02's and every other module's
+walkthrough covers that half; this is the load-path mirror image). See
+for yourself before trusting the fix:
 
 ```
 break debugfs_sysfs_init
 ```
 ```
+Breakpoint 2 at 0x...: file debugfs_sysfs.c, line 171.
+```
+
+That's a **raw, unrelocated file offset**, not a real kernel address —
+accepted with no error, would never actually fire; `insmod` would run
+straight through to completion with nothing caught.
+
+The fix: you're still stopped inside `do_init_module`, before
+`do_one_initcall(mod->init)` has run, so `mod->init` is already the
+module's real, live init-function address:
+
+```
+print mod->init
+```
+```
+$1 = (int (*)(void)) 0x...
+```
+
+(Module memory placement is random per boot even with `nokaslr` — use
+whatever `print mod->init` gives you.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/16_debugfs_sysfs/debugfs_sysfs.ko -s .init.text 0x...
+```
+```
+y
+```
+```
+break debugfs_sysfs_init
+```
+```
+Breakpoint 3 at 0x...: debugfs_sysfs_init. (2 locations)
+```
+
+Two locations — `3.1` is the same old broken raw offset as `Breakpoint
+2` a moment ago, `3.2` is the newly-relocated real one:
+
+```
+disable 3.1
+```
+```
 continue
 ```
 ```
-Thread 2 hit Breakpoint 2, debugfs_sysfs_init () at debugfs_sysfs.c:171
+Thread 2 hit Breakpoint 3.2, 0x... in init_module ()
 ```
+
+Reports as `init_module`, not `debugfs_sysfs_init` — the
+`module_init()` alias mechanism documented in module 02's walkthrough:
+both names point at the identical address, GDB just picked one label for
+this PC. No source line shown either, and a later `finish` here won't
+print a `Value returned is ...` line (module 02's walkthrough explains
+why: `add-symbol-file` supplies an address, not a recompiled type) — none
+of that affects the actual stepping below, which resumes normally from
+here:
+
 ```
 next
 ```
@@ -239,7 +300,7 @@ echo 0 | tee /sys/kernel/debugfs_sysfs_demo/enabled
 **Pane: gdb**
 
 ```
-Thread 2 hit Breakpoint 2, enabled_store (...) at debugfs_sysfs.c:84
+Thread 2 hit Breakpoint 4, enabled_store (...) at debugfs_sysfs.c:84
 ```
 ```
 next
@@ -251,7 +312,7 @@ next
 print value
 ```
 ```
-$1 = false
+$2 = false
 ```
 ```
 next
@@ -269,7 +330,7 @@ next
 print enabled
 ```
 ```
-$2 = false
+$3 = false
 ```
 ```
 finish
@@ -316,7 +377,7 @@ echo Y > /sys/kernel/debug/debugfs_sysfs_demo/enabled_raw
 **Pane: gdb**
 
 ```
-Thread 2 hit Hardware watchpoint 2: enabled
+Thread 2 hit Hardware watchpoint 5: enabled
 Old value = false
 New value = true
 ```
@@ -374,7 +435,7 @@ echo 1 | tee /sys/kernel/debugfs_sysfs_demo/increment
 **Pane: gdb**
 
 ```
-Thread 2 hit Breakpoint 3, increment_store (...) at debugfs_sysfs.c:107
+Thread 2 hit Breakpoint 6, increment_store (...) at debugfs_sysfs.c:107
 ```
 ```
 next
@@ -392,7 +453,7 @@ next
 print counter
 ```
 ```
-$3 = 1
+$4 = 1
 ```
 ```
 next
@@ -418,7 +479,7 @@ cat /sys/kernel/debugfs_sysfs_demo/counter
 print counter
 ```
 ```
-$4 = 100
+$5 = 100
 ```
 
 **What this shows:** `counter_show()`'s own `mutex_lock(&data_lock)` did
@@ -460,7 +521,7 @@ cat /sys/kernel/debug/debugfs_sysfs_demo/info
 **Pane: gdb**
 
 ```
-Thread 2 hit Breakpoint 4, info_read (...) at debugfs_sysfs.c:144
+Thread 2 hit Breakpoint 7, info_read (...) at debugfs_sysfs.c:144
 ```
 ```
 next
@@ -526,7 +587,7 @@ advance kernel/module/main.c:863
 print mod->exit
 ```
 ```
-$5 = (void (*)(void)) 0xffff80007c320540
+$8 = (void (*)(void)) 0xffff80007c320540
 ```
 
 (That address is from one real run and won't match yours — module
@@ -545,7 +606,7 @@ y
 break debugfs_sysfs_exit
 ```
 ```
-Breakpoint 6 at 0xffff80007c320540: file debugfs_sysfs.c, line 207.
+Breakpoint 9 at 0xffff80007c320540: file debugfs_sysfs.c, line 207.
 ```
 ```
 delete
@@ -566,7 +627,7 @@ rmmod debugfs_sysfs
 **Pane: gdb**
 
 ```
-Thread 2 hit Breakpoint 6, debugfs_sysfs_exit () at debugfs_sysfs.c:207
+Thread 2 hit Breakpoint 9, debugfs_sysfs_exit () at debugfs_sysfs.c:207
 207		debugfs_remove_recursive(demo_debugfs_dir);
 ```
 ```
