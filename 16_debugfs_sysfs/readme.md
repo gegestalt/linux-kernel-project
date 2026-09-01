@@ -139,70 +139,11 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). The single most
-convincing GDB session in this repo for this module's central claim — that
-debugfs's variable-binding helpers run *none* of this driver's own code:
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break enabled_store
-(gdb) break increment_store
-(gdb) continue
-```
-```bash
-echo 1 | sudo tee /sys/kernel/debugfs_sysfs_demo/increment    # sysfs side
-```
-```gdb
-# breaks at increment_store, as expected. delete it, continue, then:
-```
-```bash
-echo 9999 | sudo tee /sys/kernel/debug/debugfs_sysfs_demo/counter_raw   # debugfs side
-```
-
-**Nothing breaks.** `enabled_store`/`increment_store` are never entered
-for the debugfs-side writes, because `debugfs_create_u32()` wired
-`counter_raw` directly to generic kernel-provided get/set functions that
-never call into this module at all — you can confirm this by instead
-breaking on `debugfs_create_u32` itself right at module init and
-`step`-ing through it once to see it register a fixed pair of accessors
-this driver never wrote a line of. `print counter` before and after the
-debugfs write shows the same underlying variable changed anyway.
-
-One catch worth knowing before you try `break enabled_store`:
-`enabled_store` is a very common name for a `kobj_attribute` toggle
-handler — `grep -w enabled_store /proc/kallsyms` on this kernel turns up
-five *other*, unrelated functions sharing that exact name. GDB will
-either prompt you to pick which one or land on one that isn't this
-driver's — if `break enabled_store` behaves strangely, that's why; use
-`break debugfs_sysfs.c:84` (or wherever `enabled_store` actually starts
-in the file) to disambiguate by location instead.
-
-**`counter_show`/init/exit**, verified:
-
-```bash
-$ gdb -q -batch -nx -ex "file debugfs_sysfs.ko" \
-    -ex "info line counter_show" -ex "info line debugfs_sysfs_init" \
-    -ex "info line debugfs_sysfs_exit" debugfs_sysfs.ko
-Line 57 ... <counter_show> ...
-Line 171 ... <debugfs_sysfs_init> ...
-Line 207 ... <debugfs_sysfs_exit> ...
-```
-
-`break counter_show`, `cat /sys/kernel/debugfs_sysfs_demo/counter`, and
-`print counter` — the exact same global variable `enabled_store`/
-`increment_store` write and `counter_raw` pokes directly, now read back
-through the one function this driver actually wrote to expose it.
-
-`break debugfs_sysfs_init`, and step through `sysfs_create_group()`
-followed by the *unchecked* `debugfs_create_dir()`/`debugfs_create_u32()`/
-`debugfs_create_bool()`/`debugfs_create_file()` calls — `print
-demo_debugfs_dir` after each one still shows a real pointer (or a
-harmless dummy on a kernel without `CONFIG_DEBUG_FS`), the live
-confirmation of this module's own comment that debugfs setup failure is
-never treated as fatal here, unlike the `sysfs_create_group()` call just
-before it which *is* checked and *does* unwind on failure.
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). Includes a watchpoint on
+`enabled` that trips from a debugfs write while never entering this
+driver's own `enabled_store()` — direct, mechanical proof that sysfs and
+debugfs share one underlying byte, not two synchronized copies.
 

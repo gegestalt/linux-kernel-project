@@ -142,78 +142,11 @@ make clean            # also removes the stress_test binary
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md). One honest caveat
-first: a KGDB break-in stops **every CPU**, so you cannot literally
-watch two `write()` calls interleave live — the value of GDB here is
-inspecting the *vulnerable window* and the lock state directly, not
-catching a race in the act.
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break race_write
-(gdb) continue
-```
-```bash
-echo 0 | sudo tee /sys/class/misc/race_demo/mode   # MODE_NONE
-echo x | sudo tee /dev/race_demo
-```
-```gdb
-(gdb) next               # step in from race_write - increment_once() is inlined, so `next`
-(gdb) next                # walks straight through its body, no separate breakpoint needed
-(gdb) next               # ... until just past `tmp = READ_ONCE(counter_plain);`
-(gdb) print tmp            # the value this "thread" has locally cached
-(gdb) print counter_plain   # the shared value - identical right now, but about to diverge
-```
-
-(`break increment_once` directly would fail: `increment_once()` is
-`static` and small enough that GCC inlines it entirely into
-`race_write()`, leaving no symbol of its own — confirmed via
-`gdb -batch -ex "info line increment_once"` reporting an address
-*inside* `race_write`, not a separate function.)
-
-Right here is the entire bug: any other writer that ran between this
-`next` and the `WRITE_ONCE(counter_plain, tmp + 1);` a few lines down
-would have its increment silently overwritten. Switch `mode` to `1`
-(spinlock) or `2` (mutex), re-break, and compare: `print counter_spinlock`
-/ `print counter_mutex` show the lock actually held (non-zero/owned)
-for the whole read-modify-write, which is the structural reason the race
-can't happen in those modes — there's no window to be caught in.
-
-**`mode_store`/`reset_store`/init/exit**, all verified:
-
-```bash
-$ gdb -q -batch -nx -ex "file concurrency_locking.ko" \
-    -ex "info line mode_store" -ex "info line reset_store" \
-    -ex "info line concurrency_locking_init" -ex "info line concurrency_locking_exit" \
-    concurrency_locking.ko
-Line 193 ... <mode_store> ...
-Line 225 ... <reset_store> ...
-Line 247 ... <concurrency_locking_init> ...
-Line 269 ... <concurrency_locking_exit> ...
-```
-
-```gdb
-(gdb) break mode_store
-(gdb) continue
-```
-```bash
-echo 3 | sudo tee /sys/class/misc/race_demo/mode
-```
-```gdb
-(gdb) print value            # kstrtoint()'d from "3" - not the raw string
-(gdb) next                    # the `value < MODE_NONE || value > MODE_ATOMIC` range check
-(gdb) next                     # WRITE_ONCE(mode, value) - the actual switch
-(gdb) finish
-```
-
-`break reset_store`, trigger with `echo 1 | sudo tee
-/sys/class/misc/race_demo/reset`, and step through `reset_counters()` —
-note it takes `counter_spinlock` to zero `counter_plain` *and* separately
-calls `atomic64_set()` on `counter_atomic` with no lock at all, because
-an atomic write needs none. Two different reset mechanisms for two
-different concurrency strategies, both real code you can watch run.
-
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). One honest caveat up front,
+covered there: a KGDB break-in stops **every CPU**, so you cannot
+literally watch two `write()` calls interleave live — the value of GDB
+here is inspecting the *vulnerable window* and each lock's actual state
+directly, not catching a race in the act.

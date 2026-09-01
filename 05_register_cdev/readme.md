@@ -123,104 +123,11 @@ make clean
 
 ## Debugging with GDB
 
-For a full, self-contained, step-by-step session for this module — tmux
-pane layout, every command, every output explained — see
-[`gdb_walkthrough.md`](gdb_walkthrough.md).
-
-Setup: [`../gdb_debugging.md`](../gdb_debugging.md).
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break register_cdev_read
-(gdb) continue
-```
-```bash
-cat /dev/register_cdev
-```
-```gdb
-(gdb) print *offset                # starts at 0 on a fresh open
-(gdb) next                          # past the scnprintf() building `message`
-(gdb) print message                 # the exact kernel-stack buffer about to cross to userspace
-(gdb) print bytes_to_copy
-(gdb) next                          # step over copy_to_user()
-(gdb) print *offset                 # advanced by bytes_to_copy
-```
-
-Because `message` is a plain stack array (not heap-allocated), this is a
-good module for getting comfortable with `print message` on a local array
-versus `print buffer` on a `kzalloc()`'d pointer elsewhere in this repo
-(module 09) — same debugger command, genuinely different kind of memory
-underneath.
-
-The rest of this module's targets, all verified first:
-
-```bash
-$ gdb -q -batch -nx -ex "file register_cdev.ko" \
-    -ex "info line register_cdev_open" -ex "info line register_cdev_release" \
-    -ex "info line register_cdev_init" -ex "ptype open_count" register_cdev.ko
-Line 26 of "register_cdev.c" starts at address 0x188 <register_cdev_open> ...
-Line 97 of "register_cdev.c" starts at address 0xc8 <register_cdev_release> ...
-Line 127 of "register_cdev.c" starts at address 0x8b0 <register_cdev_init> ...
-type = struct {
-    int counter;
-}
-```
-
-**`register_cdev_open`/`register_cdev_release` — watch `open_count`
-change under a real `atomic_t`, live**, exactly matching the
-two-concurrent-opens exercise above:
-
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break register_cdev_open
-(gdb) break register_cdev_release
-(gdb) continue
-```
-```bash
-exec 3</dev/register_cdev    # holds an open fd, does NOT close it yet
-```
-```gdb
-(gdb) print open_count                # {counter = 1} - the raw atomic_t struct
-(gdb) print open_count.counter         # 1 - the plain int inside it
-(gdb) print imajor(inode)               # cross-check against the major you mknod'd with
-(gdb) print iminor(inode)
-(gdb) continue
-```
-```bash
-exec 3<&-    # now close it
-```
-```gdb
-# breaks in register_cdev_release this time
-(gdb) print open_count.counter         # back to 0
-(gdb) finish
-```
-
-`print open_count` on the raw `atomic_t` is worth doing once just to see
-that it's genuinely a one-member struct wrapping a plain `int` — the
-"atomic" part is entirely in *how* `atomic_inc_return()`/
-`atomic_dec_return()` touch that `int` (a single hardware-guaranteed
-instruction), not in the type itself looking any different from a
-normal counter.
-
-**`register_cdev_init` — the dynamic major allocation**:
-
-```gdb
-(gdb) break register_cdev_init
-(gdb) continue
-```
-```bash
-sudo insmod ./register_cdev.ko
-```
-```gdb
-(gdb) next     # past register_chrdev(0, DEVICE_NAME, &register_cdev_fops)
-(gdb) print major   # whatever the kernel picked - compare against dmesg's own report
-(gdb) finish
-```
-
-**`register_cdev_exit`** resolves the same way module 03's `gpioctrl_exit`
-does — its entry line lands inside `timekeeping.h` because its first
-real statement inlines `ktime_get_ns()`. Still a perfectly real,
-breakable symbol (`break register_cdev_exit` works normally); see
-module 03's README for the full explanation of why `info line` reports
-it that way.
+A fully self-contained, hands-on walkthrough for this module — tmux
+session creation, build, boot, every gdb command, every expected output,
+and cleanup, start to finish, no other file needed:
+[`gdb_walkthrough.md`](gdb_walkthrough.md). Covers the open/read/release
+triangle end to end: the dynamic major allocation, `struct inode`/
+`struct file` as GDB sees them, the `atomic_t` open-count under two
+concurrent opens, and the kernel-stack `read()` buffer.
 

@@ -1,243 +1,413 @@
-# GDB walkthrough — 05_register_cdev
+# GDB walkthrough — 05_register_cdev, hands-on, start to finish
 
 `register_cdev.c` is the legacy, one-call char device registration path
 — `register_chrdev()` allocates a major dynamically and wires up
 `file_operations` in a single step, with no `struct cdev`, no device
-class, and (unlike module 09's modern equivalent) no automatic `/dev` node
-— you `mknod` it yourself once you've read the major out of `dmesg`.
-The debugging focus here is the **open/read/release triangle**: three
-separate callbacks, invoked by three separate syscalls, that all need
-to agree on `struct inode`/`struct file` identity — and an `atomic_t`
-open-count that's the simplest possible shared-state example before
-module 11 covers real races.
+class, and no automatic `/dev` node — you `mknod` it yourself once
+you've read the major out of `dmesg`. The debugging focus here is the
+**open/read/release triangle**: three separate callbacks, invoked by
+three separate syscalls, that all need to agree on `struct inode`/
+`struct file` identity — plus an `atomic_t` open-count, the simplest
+possible shared-state example before module 11 covers real races.
 
-## Environment
+Every command below says exactly which pane. One command per step,
+always — paste it, wait for the prompt to come back, then the next one.
+
+---
+
+## Step 0 — start the tmux session
+
+*Regular terminal, not tmux yet.*
+
+```bash
+tmux kill-session -t kgdb 2>/dev/null
+tmux new-session -d -s kgdb -x 220 -y 50
+tmux split-window -h -t kgdb
+tmux set -g mouse on
+tmux select-pane -t kgdb:0.0 -T vmb
+tmux select-pane -t kgdb:0.1 -T gdb
+tmux set -t kgdb pane-border-status top
+tmux attach -t kgdb
+```
+
+Two panes now: **vmb** (left) and **gdb** (right).
+
+## Step 1 — build it
+
+*Regular terminal.*
 
 ```bash
 cd 05_register_cdev
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
+```
+
+## Step 2 — verify the breakpoint targets, statically
+
+```bash
+gdb -q -batch -nx -ex "file register_cdev.ko" \
+    -ex "info line register_cdev_open" -ex "info line register_cdev_release" \
+    -ex "info line register_cdev_init" -ex "ptype open_count" register_cdev.ko
+```
+```
+Line 26 of "register_cdev.c" starts at address 0x188 <register_cdev_open> ...
+Line 97 of "register_cdev.c" starts at address 0xc8 <register_cdev_release> ...
+Line 127 of "register_cdev.c" starts at address 0x8b0 <register_cdev_init> ...
+type = struct {
+    int counter;
+}
+```
+
+`open_count` really is just a one-member struct wrapping a plain `int` —
+the "atomic" part is entirely in *how* `atomic_inc_return()`/
+`atomic_dec_return()` touch that `int` (a single hardware-guaranteed
+instruction), not in the type looking any different from a normal
+counter.
+
+## Step 3 — check vermagic, copy onto the scratch disk
+
+```bash
 modinfo register_cdev.ko | grep vermagic
+```
+```
+vermagic: 7.2.0-kgdb-debug+ SMP preempt mod_unload modversions aarch64
+```
+```bash
 sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
 sudo mkdir -p /tmp/vmb-mnt/05_register_cdev
 sudo cp register_cdev.ko /tmp/vmb-mnt/05_register_cdev/
 sudo umount /tmp/vmb-mnt
 ```
 
-## tmux layout
+## Step 4 — boot the guest
 
-Standard `vmb` + `gdb` panes inside the `kgdb` tmux session — see [`../gdb_debugging.md`](../gdb_debugging.md). **One gdb command per paste, always** — a multi-line paste can get merged into one bogus command instead of running one line per Enter (that doc's third gotcha rule).
+**Pane: vmb**
 
-## The walkthrough
-
-### Step 1 — init: watch the dynamic major get allocated
-
-```gdb
-(gdb) target remote :1234
-(gdb) lx-version
-(gdb) break do_init_module
-(gdb) continue
-```
 ```bash
-# vmb:
+qemu-system-aarch64 -M virt -cpu max -m 1024 -smp 2 \
+  -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
+  -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
+  -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
+  -append "console=ttyAMA0 rdinit=/init nokaslr" -nographic -s
+```
+
+Wait for `=== VM B (QEMU) ready ===` and `~ #`.
+
+## Step 5 — start gdb, connect
+
+**Pane: gdb**
+
+```bash
+cd /home/adiopocere/Desktop/codes/linux_mainline && gdb -q -iex 'set auto-load safe-path /' vmlinux
+```
+```
+target remote :1234
+```
+```
+lx-version
+```
+
+## Step 6 — break on the load entry point
+
+**Pane: gdb**
+
+```
+break do_init_module
+```
+```
+continue
+```
+
+Switch panes.
+
+## Step 7 — trigger the load
+
+**Pane: vmb**
+
+```bash
 insmod /mnt/labs/05_register_cdev/register_cdev.ko
 ```
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
-(gdb) break register_cdev_init
+
+## Step 8 — load symbols, break inside init, watch the dynamic major get allocated
+
+**Pane: gdb**
+
 ```
-
-Verified: `Line 127 of "register_cdev.c" starts at address 0x8b0
-<register_cdev_init>`.
-
-```gdb
-(gdb) continue
+lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+```
+```
+break register_cdev_init
+```
+```
+continue
+```
+```
 Thread 2 hit Breakpoint N, register_cdev_init () at register_cdev.c:127
-(gdb) next    # register_chrdev(0, DEVICE_NAME, &register_cdev_fops)
-(gdb) print major
+```
+```
+next
+```
+```
+print major
+```
+```
 $1 = 240
 ```
 
-The `0` passed as the first argument to `register_chrdev()` is a
-request for a *dynamically* assigned major — `major` is whatever the
-kernel actually handed back, which can differ run to run depending on
-what else has claimed a major number. This is exactly why the driver
-prints it (`pr_info("init: major=%d ...")`) rather than hardcoding
-it anywhere: there is no other way for userspace to know it. You now
-know it before `dmesg` even shows the line, straight from the
-variable.
+**What this shows:** the `0` passed as `register_chrdev()`'s first
+argument is a request for a *dynamically* assigned major — `major` is
+whatever the kernel actually handed back, which can differ run to run
+depending on what else has claimed a major number. That's exactly why
+the driver `pr_info()`s it: there's no other way for userspace to know
+it. You now know it before `dmesg` even shows the line, straight from
+the variable.
 
-```gdb
-(gdb) finish
+```
+finish
+```
+
+**Pane: vmb**
+
+```bash
+dmesg | tail -2
 ```
 ```bash
-# vmb:
-dmesg | tail -2
 mknod /dev/register_cdev0 c $(dmesg | grep -o 'major=[0-9]*' | tail -1 | cut -d= -f2) 0
 ```
 
-### Step 2 — `open()`: `struct inode`/`struct file` as GDB sees them
+## Step 9 — `open()`: `struct inode`/`struct file` as GDB sees them
 
-```gdb
-(gdb) break register_cdev_open
-(gdb) continue
+**Pane: gdb**
+
 ```
+break register_cdev_open
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 cat /dev/register_cdev0 &
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 2 hit Breakpoint N, register_cdev_open (inode=0x..., file=0x...) at register_cdev.c:26
-(gdb) print *inode
-$2 = {i_mode = ..., i_rdev = ..., ...}
-(gdb) print imajor(inode)
-(gdb) print iminor(inode)
+```
+```
+print inode->i_rdev
+```
+```
+$2 = 61440
 ```
 
-`imajor()`/`iminor()` are ordinary inline functions, not macros, so
-GDB can call... actually, per KGDB's own limits (see
-[`../gdb_debugging.md`](../gdb_debugging.md#a-note-on-function-calls-from-gdb)),
-**don't** try `print imajor(inode)` as an actual function call on a
-live KGDB target — instead read the same field it reads directly:
+(`imajor()`/`iminor()` are ordinary inline functions — don't try `print
+imajor(inode)` as an actual live function call against a KGDB target,
+it isn't reliable there. Reading `i_rdev` directly, the same field those
+inlines read, works fine.)
 
-```gdb
-(gdb) print inode->i_rdev
-$3 = 61440    # MAJOR(i_rdev)<<20 | MINOR(i_rdev) - decode by hand, or just trust dmesg's own print
-(gdb) print current->comm
-$4 = "cat\000\000\000\000\000\000\000\000\000\000\000\000"
-(gdb) print current->pid
+```
+print current->comm
+```
+```
+$3 = "cat\000\000\000\000\000\000\000\000\000\000\000\000"
+```
+```
+print current->pid
 ```
 
-`current` here really is `cat`'s own `task_struct` — `open()` runs in
-the calling process's own context, synchronously, which is why
-`current` is meaningful at all inside a syscall-driven callback (contrast
-with module 03's workqueue callback, where `current` was a `kworker`
-instead of anything the user typed).
+**What this shows:** `current` really is `cat`'s own `task_struct` —
+`open()` runs in the calling process's own context, synchronously, which
+is why `current` is meaningful at all inside a syscall-driven callback.
+(Contrast with module 03's workqueue callback, where `current` was a
+`kworker` instead of anything the user typed.)
 
-```gdb
-(gdb) next   # past atomic_inc_return(&open_count)
-(gdb) print count
+```
+next
+```
+```
+print count
 ```
 
-### Step 3 — two opens at once: the atomic counter earns its keep
+## Step 10 — two opens at once: the atomic counter earns its keep
 
 Background a second reader before releasing the first, so `open_count`
 genuinely reaches 2 rather than bouncing straight back to 0/1:
 
-```gdb
-(gdb) continue
 ```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb, while the first `cat` is still backgrounded (or use `sleep 5 < /dev/register_cdev0 &` to hold it open longer):
 cat /dev/register_cdev0 &
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 2 hit Breakpoint N, register_cdev_open (...) at register_cdev.c:26
-(gdb) next
-(gdb) print count
-$5 = 2
+```
+```
+next
+```
+```
+print count
+```
+```
+$4 = 2
 ```
 
-`atomic_inc_return()` is what makes this number trustworthy even if
-two opens happened at genuinely the same instant on different CPUs —
-worth explicitly contrasting with module 11, which is entirely about
-what goes wrong when a shared counter *isn't* touched atomically.
+`atomic_inc_return()` is what makes this number trustworthy even if two
+opens happened at genuinely the same instant on different CPUs — worth
+explicitly contrasting with module 11, which is entirely about what goes
+wrong when a shared counter *isn't* touched atomically.
 
-### Step 4 — `read()`: the kernel-stack buffer, and EOF
+## Step 11 — `read()`: the kernel-stack buffer, and EOF
 
-```gdb
-(gdb) break register_cdev_read
-(gdb) continue
+```
+break register_cdev_read
+```
+```
+continue
 ```
 
-(Both backgrounded `cat`s from step 3 will have already issued their
-first `read()` — `continue` past those hits, or `delete` and reset if
-the flow gets confusing; see
-[`../gdb_debugging.md`](../gdb_debugging.md#two-rules-that-cause-real-confusing-looking-failures-if-missed).)
+(Both backgrounded `cat`s from step 10 will already issue their first
+`read()` — `continue` past those hits if they land first.)
 
-```gdb
+```
 Thread 2 hit Breakpoint N, register_cdev_read (...) at register_cdev.c:46
-(gdb) next   # scnprintf() into message[]
-(gdb) print message
-$6 = "register_cdev kernel device\nmajor=240\nminor=0\ncontext=cat[123]\n"
-(gdb) print &message
+```
+```
+next
+```
+```
+print message
+```
+```
+$5 = "register_cdev kernel device\nmajor=240\nminor=0\ncontext=cat[123]\n"
+```
+```
+print &message
 ```
 
-`message` is a plain local array — `print &message` shows an address
-on the *current kernel stack*, not heap memory; it exists only for the
-duration of this one `read()` call and is a different address on every
-call, including from the exact same process. Step further and watch
-the EOF contract:
+**What this shows:** `message` is a plain local array — `print &message`
+shows an address on the *current kernel stack*, not heap memory; it
+exists only for the duration of this one `read()` call and differs on
+every call, including from the exact same process. Compare that with
+`open_count` — a real global — which keeps the same address for the
+module's whole lifetime.
 
-```gdb
-(gdb) next    # past the copy_to_user()
-(gdb) print bytes_to_copy
-(gdb) continue
+```
+next
+```
+```
+print bytes_to_copy
+```
+```
+continue
 ```
 
 The `cat` this is serving will call `read()` a second time after
 consuming the message — catch that second hit and watch `*offset >=
-message_length` evaluate true, taking the `return 0;` path
-immediately: that `0` is precisely what tells `cat` "end of file, stop
-reading," the same convention every regular file relies on.
+message_length` evaluate true, taking the `return 0;` path immediately:
+that `0` is precisely what tells `cat` "end of file, stop reading," the
+same convention every regular file relies on.
 
-## Cleanup
+## Step 12 — clean up: the `__exit` relocation gotcha, again
 
-**A bare `break register_cdev_exit` right after `lx-symbols` does not
-work** — confirmed live. `register_cdev_exit` is marked `__exit`, which
-places it in the `.exit.text` ELF section, and `lx-symbols` never
-relocates that section (only a fixed list including `.text`, `.rodata`,
-`.bss`, and a few others — full diagnosis, straight from this kernel's
-`scripts/gdb/linux/symbols.py`, in module 02's and 12's walkthroughs).
-The breakpoint resolves to a tiny raw file offset instead of a real
-kernel address, accepts with no error, and then simply never fires —
-`rmmod` completes normally underneath it.
+`register_cdev_exit` is `__exit`, placed in `.exit.text`, which
+`lx-symbols` never relocates — same underlying cause documented in
+[02_better_hello's walkthrough](../02_better_hello/gdb_walkthrough.md#step-11--the-exit-path-where-it-actually-differs-from-module-01).
 
-**The working fix**:
-
-```gdb
-(gdb) delete
-(gdb) break __do_sys_delete_module
-(gdb) continue
 ```
+delete
+```
+```
+y
+```
+```
+break __do_sys_delete_module
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 rmmod register_cdev
 ```
-```gdb
+
+**Pane: gdb**
+
+```
 Thread 1 hit Breakpoint N, __do_sys_delete_module (...) at kernel/module/main.c:808
-(gdb) advance kernel/module/main.c:863
+```
+```
+advance kernel/module/main.c:863
+```
+```
 863         mod->exit();
-(gdb) print mod->exit
-$1 = (void (*)(void)) 0xffff80007c32b4d0
-(gdb) add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/05_register_cdev/register_cdev.ko -s .exit.text 0xffff80007c32b4d0
-(y or n) y
-(gdb) break register_cdev_exit
+```
+```
+print mod->exit
+```
+```
+$6 = (void (*)(void)) 0xffff80007c32b4d0
+```
+
+(That address is from one real run — module memory placement is random
+per boot even with `nokaslr`. Use whatever `print mod->exit` gives you
+next.)
+
+```
+add-symbol-file /home/adiopocere/Desktop/codes/linux-kernel-project/05_register_cdev/register_cdev.ko -s .exit.text 0xffff80007c32b4d0
+```
+```
+y
+```
+```
+break register_cdev_exit
+```
+```
 Breakpoint N at 0x1b0: register_cdev_exit. (2 locations)
 ```
 
-(The address is from one real run — always use whatever `print
-mod->exit` gives you; module memory placement is random per boot even
-with `nokaslr`.) Disable the broken location, keep the relocated one:
+Two locations — `N.1` is the old broken raw-offset one, `N.2` is the
+newly-relocated real one:
 
-```gdb
-(gdb) disable N.1
-(gdb) continue
 ```
+disable N.1
+```
+```
+continue
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 rmmod register_cdev
 ```
-```gdb
-Thread 1 hit Breakpoint N.2, 0xffff80007c32b4d4 in cleanup_module ()
-(gdb) next   # step forward until you're back in register_cdev.c
-(gdb) print atomic_read(&open_count)
+
+**Pane: gdb**
+
 ```
-Actually calling `atomic_read()` hits the same live-function-call
-caveat as step 2 — read the field GDB already exposes instead:
-```gdb
-(gdb) print open_count
+Thread 1 hit Breakpoint N.2, 0xffff80007c32b4d4 in cleanup_module ()
+```
+```
+next
+```
+```
+print open_count
+```
+```
 $7 = {counter = 0}
 ```
+
 Both backgrounded `cat`s should have already exited (EOF closes their
 fd, dropping `open_count` back toward 0) — if it isn't 0 here, one of
 them is still holding the device open somewhere, which `rmmod` would
@@ -245,18 +415,48 @@ otherwise still permit (this driver has no refcounting tied to
 `fops.owner` beyond the module reference itself — worth comparing to
 module 12's exit path, which explicitly reasons about exactly this).
 
+```
+finish
+```
+
+## Step 13 — clean up
+
+**Pane: gdb**
+
+```
+delete
+```
+```
+y
+```
+
+**Pane: vmb**
+
 ```bash
-# vmb:
 poweroff -f
 ```
 
+**Pane: gdb**
+
+```
+quit
+```
+
+---
+
 ## What this proves
 
-The same `struct inode *`/`struct file *` pair travels through
-`open()`, every `read()`, and `release()` for one open file description
-— GDB printing `current->pid`/`current->comm` at each stop shows
-directly which process is on the other end of that syscall, and the
-`message[]` buffer's stack address changing between calls is direct,
-visible proof that a local array is genuinely reallocated (in the
-"new stack frame" sense) on every single invocation rather than
-persisting between them the way `open_count` — a real global — does.
+- The same `struct inode *`/`struct file *` pair travels through
+  `open()`, every `read()`, and `release()` for one open file
+  description — `current->pid`/`current->comm` at each stop shows
+  directly which process is on the other end of that syscall (steps
+  9–11).
+- `message[]`'s stack address changing between calls (step 11) is
+  direct, visible proof that a local array is genuinely reallocated (in
+  the "new stack frame" sense) on every invocation, unlike `open_count`
+  — a real global that keeps the same address for the module's whole
+  lifetime.
+- `register_chrdev(0, ...)`'s dynamic major only exists at runtime — the
+  driver has to `pr_info()` it because there's no other way for
+  userspace to learn it, confirmed by reading it straight out of the
+  live `major` variable before `dmesg` even shows the line (step 8).

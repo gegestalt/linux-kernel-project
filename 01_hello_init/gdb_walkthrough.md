@@ -1,38 +1,74 @@
-# GDB walkthrough — 01_hello_init
+# GDB walkthrough — 01_hello_init, hands-on, start to finish
 
 `hello.c` is the smallest possible module: `init_module()` prints one
-line and returns 0, `cleanup_module()` prints another line. There is no
-logic to get wrong here — the point of this walkthrough isn't to find a
-bug, it's to build the *mechanical* muscle memory every later module
-depends on: getting a breakpoint to fire at all inside code that,
-before `insmod`, doesn't exist anywhere in kernel memory yet. Every
-later module's walkthrough assumes you've done this one first.
+line and returns 0, `cleanup_module()` prints another. There's no bug to
+find here — the point is building the *mechanical* muscle memory every
+later module depends on: getting a breakpoint to fire at all inside code
+that, before `insmod`, doesn't exist anywhere in kernel memory yet.
 
-Note the function names: this module still uses the legacy
-`init_module`/`cleanup_module` symbols directly (no `module_init()`/
-`module_exit()` macros, no `__init`/`__exit` — see 02_better_hello for
-the modern equivalent). That's not an accident to work around; it's
-exactly why module 01 is the right place to learn the "module isn't
-loaded yet" problem, because `init_module` is also the literal name of
-the generic kernel function every module's init funnels through
-(`kernel/module/main.c`'s `do_init_module()` calls a function pointer
-it names `init_module` internally) — so for this one module, and only
-this one, you'll see two different `init_module`s at different points
-in the same session.
+This module uses the legacy `init_module`/`cleanup_module` names
+directly — no `module_init()`/`module_exit()` macros (see
+[02_better_hello](../02_better_hello/) for the modern equivalent). That
+matters here specifically: `init_module` is *also* the literal name of
+the generic function every module's init funnels through
+(`kernel/module/main.c`'s `do_init_module()` calls a function pointer it
+names `init_module` internally) — so in this one session you'll run into
+two different things both called `init_module` at different points.
 
-## Environment
+Every command below says exactly which pane. One command per step,
+always — paste it, wait for the prompt to come back, then the next one.
 
-One-time QEMU + busybox-initramfs setup: [`../gdb_debugging.md`](../gdb_debugging.md#qemu-path-recommended-the-debug-kernel-right-here-no-second-vm).
-Build this module against the debug tree, not your host kernel:
+---
+
+## Step 0 — start the tmux session
+
+*Regular terminal, not tmux yet.*
+
+```bash
+tmux kill-session -t kgdb 2>/dev/null
+tmux new-session -d -s kgdb -x 220 -y 50
+tmux split-window -h -t kgdb
+tmux set -g mouse on
+tmux select-pane -t kgdb:0.0 -T vmb
+tmux select-pane -t kgdb:0.1 -T gdb
+tmux set -t kgdb pane-border-status top
+tmux attach -t kgdb
+```
+
+Two panes now: **vmb** (left) and **gdb** (right).
+
+## Step 1 — build it
+
+*Regular terminal (detach with `Ctrl-b d`, or a separate window).*
 
 ```bash
 cd 01_hello_init
 make -C /home/adiopocere/Desktop/codes/linux_mainline M=$(pwd) modules
-modinfo hello.ko | grep vermagic   # must read 7.2.0-kgdb-debug+
 ```
 
-Copy it onto the scratch disk:
+## Step 2 — verify the source lines this module will stop on
 
+```bash
+gdb -q -batch -nx -ex "file hello.ko" -ex "info line init_module" -ex "info line cleanup_module" hello.ko
+```
+```
+Line 9 of "hello.c" starts at address 0x18 <init_module> and ends at 0x20 <init_module+8>.
+Line 20 of "hello.c" starts at address 0x60 <cleanup_module> and ends at 0x68 <cleanup_module+8>.
+```
+
+Line 9 is the `printk(KERN_INFO "Hello luv .\n");` call itself — the
+function's opening brace (line 8) gets its own separate, zero-length
+line entry. Normal DWARF/compiler behavior: GCC assigns the prologue to
+the declaration line and the first real statement to the next one.
+
+## Step 3 — check vermagic, copy onto the scratch disk
+
+```bash
+modinfo hello.ko | grep vermagic
+```
+```
+vermagic: 7.2.0-kgdb-debug+ SMP preempt mod_unload modversions aarch64
+```
 ```bash
 sudo mount -o loop /home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img /tmp/vmb-mnt
 sudo mkdir -p /tmp/vmb-mnt/01_hello_init
@@ -40,56 +76,70 @@ sudo cp hello.ko /tmp/vmb-mnt/01_hello_init/
 sudo umount /tmp/vmb-mnt
 ```
 
-## tmux layout
+## Step 4 — boot the guest
 
-One tmux session, two panes, per the main guide: `vmb` (left, the QEMU
-guest's serial console) and `gdb` (right, GDB, running on this machine,
-never freezes). Set the `kgdb` session up once as shown in
-[`../gdb_debugging.md`](../gdb_debugging.md#tmux-layout-set-this-up-once-reuse-for-every-module),
-then boot the guest and start GDB exactly as shown right after that —
-including `nokaslr` on the kernel command line and `gdb -q -iex 'set
-auto-load safe-path /' vmlinux`. Click (mouse is on) or `Ctrl-b` +
-arrow to switch panes — don't type gdb commands into the `vmb` pane or
-vice versa, and paste exactly one gdb command at a time (that doc's
-third gotcha rule — a multi-line paste can get merged into one bogus
-command instead of running one line per Enter).
+**Pane: vmb**
 
-## The walkthrough
-
-Connect GDB to the guest and confirm the kernel matches before doing
-anything else — this is the single most common KGDB mistake and it
-fails silently otherwise (wrong line numbers, "optimized out"
-everywhere, breakpoints that never fire):
-
-```gdb
-(gdb) target remote :1234
-(gdb) lx-version
+```bash
+qemu-system-aarch64 -M virt -cpu max -m 1024 -smp 2 \
+  -kernel /home/adiopocere/Desktop/codes/linux_mainline/arch/arm64/boot/Image \
+  -initrd /home/adiopocere/Desktop/codes/qemu-vmb/initramfs.cpio.gz \
+  -drive file=/home/adiopocere/Desktop/codes/qemu-vmb/labs-disk.img,if=virtio,format=raw \
+  -append "console=ttyAMA0 rdinit=/init nokaslr" -nographic -s
 ```
 
-`lx-version` should report `7.2.0-kgdb-debug+`, matching `cat
-/home/adiopocere/Desktop/codes/linux_mainline/include/config/kernel.release`.
+Wait for `=== VM B (QEMU) ready ===` and `~ #`.
 
-### Step 1 — break on the generic module-init hook
+## Step 5 — start gdb, connect, confirm the kernel matches
+
+**Pane: gdb**
+
+```bash
+cd /home/adiopocere/Desktop/codes/linux_mainline && gdb -q -iex 'set auto-load safe-path /' vmlinux
+```
+```
+target remote :1234
+```
+```
+lx-version
+```
+
+**What this shows:** `lx-version` should report `7.2.0-kgdb-debug+` —
+matching `cat include/config/kernel.release` in this same tree. This is
+the single most common KGDB mistake to skip and it fails *silently*
+later otherwise: wrong line numbers, "optimized out" everywhere,
+breakpoints that never fire, with no error pointing at the real cause.
+
+## Step 6 — break on the generic module-init hook
 
 `hello.ko` isn't loaded yet, so GDB has no symbol table entry for
-anything inside it — `break init_module` right now would actually
-resolve to a *different* function (see the note above) or fail
-outright, not to `hello.c`'s `init_module`. Instead, break on the one
-function every module's init funnels through regardless of what the
-module itself is called:
+anything inside it. `break init_module` right now would resolve to a
+*different* function (the kernel's own generic one, not `hello.c`'s) or
+fail outright — not what you want. Break on the function every module's
+init funnels through instead, regardless of module name:
 
-```gdb
-(gdb) break do_init_module
-(gdb) continue
+**Pane: gdb**
+
+```
+break do_init_module
+```
+```
+continue
 ```
 
-In the `vmb` pane:
+Prints `Continuing.` — switch panes.
+
+## Step 7 — trigger the load
+
+**Pane: vmb**
 
 ```bash
 insmod /mnt/labs/01_hello_init/hello.ko
 ```
 
-GDB stops:
+## Step 8 — first stop
+
+**Pane: gdb**
 
 ```
 Thread 2 hit Breakpoint 1, do_init_module (mod=mod@entry=0x...) at kernel/module/main.c:3089
@@ -98,145 +148,181 @@ Thread 2 hit Breakpoint 1, do_init_module (mod=mod@entry=0x...) at kernel/module
 
 This is real, generic kernel code (`kernel/module/main.c`), not
 `hello.c` — you're stopped *before* the kernel has even called into the
-module. `mod` is a pointer to the `struct module` the kernel just
-built for `hello.ko`; `print mod->name` here will show `"hello"`.
+module. `mod` is a pointer to the `struct module` the kernel just built
+for `hello.ko`:
 
-### Step 2 — load the module's own symbols
+```
+print mod->name
+```
+```
+$1 = "hello", '\000' <repeats ...>
+```
+
+## Step 9 — load the module's own symbols, break inside it
 
 Now that `do_init_module` has been reached, the kernel has already
-mapped `hello.ko`'s code into memory and published its section
-addresses under `/sys/module/hello/sections/` — `lx-symbols` reads
-exactly that:
+mapped `hello.ko`'s code into memory and published its section addresses
+under `/sys/module/hello/sections/` — `lx-symbols` reads exactly that:
 
-```gdb
-(gdb) lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+```
+lx-symbols /home/adiopocere/Desktop/codes/linux-kernel-project
+```
+```
 loading @0x...: /home/adiopocere/Desktop/codes/linux-kernel-project/01_hello_init/hello.ko
 ```
 
-From this point on, `hello.c`'s own two functions are real, breakable
-symbols — confirmed statically against the built `.ko` (no VM needed
-for this part):
+`hello.c`'s own two functions are now real, breakable symbols:
 
 ```
-$ gdb -q -batch -nx -ex "file hello.ko" -ex "info line init_module" -ex "info line cleanup_module" hello.ko
-Line 9 of "hello.c" starts at address 0x18 <init_module> and ends at 0x20 <init_module+8>.
-Line 20 of "hello.c" starts at address 0x60 <cleanup_module> and ends at 0x68 <cleanup_module+8>.
+break init_module
 ```
-
-Line 9 is the `printk(KERN_INFO "Hello luv .\n");` call itself (the
-function's opening brace, line 8, gets its own separate, zero-length
-line entry — this is a normal DWARF/compiler artifact, not a bug: GCC
-often assigns the prologue to the declaration line and the first real
-statement to the next).
-
-### Step 3 — break inside the module itself and step through init
-
-```gdb
-(gdb) break init_module
+```
 Breakpoint 2 at 0x...: file hello.c, line 9.
-(gdb) continue
+```
+```
+continue
 ```
 
-`insmod` is still sitting in `do_init_module`'s call chain from step
-1's `continue`, so it runs straight into the new breakpoint without
-you touching the `vmb` pane again:
+`insmod` is still sitting in `do_init_module`'s call chain from step 6's
+`continue`, so it runs straight into this new breakpoint with no need to
+touch the `vmb` pane again:
 
 ```
 Thread 2 hit Breakpoint 2, init_module () at hello.c:9
 9           printk(KERN_INFO "Hello luv .\n");
-(gdb) next
+```
+
+## Step 10 — step through init, confirm the return value
+
+```
+next
+```
+```
 16          return 0;
 ```
 
-Notice what `next` just skipped: the comment block (lines 12–15) isn't
-code, so the debugger has nothing to stop on there — `next` always
-moves line-to-line in the *compiled* sense, not the textual one.
+Notice what `next` just skipped — the comment block (lines 12–15) isn't
+code, so there's nothing there to stop on. `next` always moves
+line-to-line in the *compiled* sense, not the textual one.
 
-```gdb
-(gdb) finish
+```
+finish
+```
+```
 Run till exit from #0  init_module () at hello.c:16
 0xffffffffc0... in do_init_module (mod=0x...) at kernel/module/main.c:...
-Value returned is $1 = 0
+Value returned is $2 = 0
 ```
 
-`finish` runs the rest of `init_module`, pops back out into
-`do_init_module` (the same generic function from step 1 — you're now
-seeing it *after* it called into your module), and shows you the
-return value: `0`, exactly what the source returns, confirming
-`insmod` will report success. Cross-check against dmesg without
-needing the module to still be running or GDB to detach — `lx-dmesg`
-reads the ring buffer directly out of frozen kernel memory:
+`finish` ran the rest of `init_module`, popped back into
+`do_init_module` (the same generic function from step 8, now seen
+*after* it called into your module), and shows the real return value:
+`0`, exactly what the source returns. Cross-check against the kernel log
+without detaching or needing the module to still be running —
+`lx-dmesg` reads the ring buffer directly out of frozen kernel memory:
 
-```gdb
-(gdb) lx-dmesg
+```
+lx-dmesg
+```
+```
 ...
 [   12.345678] hello: Hello luv .
 ```
 
-### Step 4 — the exit path
+## Step 11 — the exit path
 
-```gdb
-(gdb) break cleanup_module
-(gdb) continue
+```
+break cleanup_module
+```
+```
+continue
 ```
 
-In `vmb`:
+**Pane: vmb**
 
 ```bash
 rmmod hello
 ```
 
-Back in `gdb`:
+**Pane: gdb**
 
 ```
 Thread 2 hit Breakpoint 3, cleanup_module () at hello.c:20
 20          printk(KERN_INFO "bye bye my luv\n");
-(gdb) next
+```
+
+`cleanup_module` already exists as a real symbol at this point — no
+catch-all breakpoint needed the way `do_init_module` was for the load
+path, since the module's own code is already mapped and symbolized.
+
+```
+bt
+```
+
+The mirror image of `do_init_module`'s call chain on the way in: a
+`delete_module(2)` syscall entry chain down to this module's own
+`cleanup_module` — the exact generic removal machinery `rmmod` is a thin
+wrapper around. (Exact frame names depend on your kernel's syscall entry
+naming convention — read whatever `bt` actually prints.)
+
+```
+next
+```
+```
 21      }
-(gdb) finish
+```
+```
+finish
+```
+```
+Run till exit from #0  cleanup_module () at hello.c:21
+Value returned has type void.
 ```
 
-`cleanup_module` returns `void` — `finish` will report "Value returned
-has type void." rather than a numeric value, which is itself worth
-noticing: not every `finish` gives you a return value to inspect, and
-that's determined by the function's actual signature, not by GDB.
+`cleanup_module` returns `void` — `finish` reports "Value returned has
+type void" rather than a numeric value, itself worth noticing: not every
+`finish` gives you a value to inspect, and that's determined by the
+function's actual signature, not by GDB.
 
-## Cleanup
+## Step 12 — clean up
 
-```gdb
-(gdb) delete 1 2 3
+**Pane: gdb**
+
+```
+delete
+```
+```
+y
 ```
 
-(Bare `delete` with no arguments deletes *all* breakpoints too, but it
-first asks `Delete all breakpoints? (y or n)` — if you're driving this
-session non-interactively (piping commands in, or typing ahead) that
-confirmation prompt can eat your next command instead of actually
-deleting anything, leaving stale breakpoints active. Naming the numbers
-explicitly, as above, skips the prompt entirely and is the safer habit
-to build now, before it costs you a confusing session later.)
+**Pane: vmb**
 
 ```bash
-# in vmb:
 poweroff -f
 ```
 
-That's enough between modules — reboot the guest fresh for the next
-one, no need to tear the tmux session down each time. Only kill it if
-you're done for the day:
+**Pane: gdb**
 
-```bash
-tmux kill-session -t kgdb
 ```
+quit
+```
+
+---
 
 ## What this proves
 
-Two things that generalize to every other module in this repo: first, an
-out-of-tree module has no symbols until the kernel has actually mapped
-it into memory, which is why `do_init_module` (or, for modules built
-with the modern `module_init()` macro — see 02 — a different generic
-hook) is always the first breakpoint, never the module's own init
-function. Second, `finish`'s reported return value is not a guess or a
-static analysis — it is GDB reading the actual register (or stack
-slot, depending on ABI) the real, running function just placed its
-return value into, at the exact instant it returned. Everything after
-this module builds on exactly this mechanism, aimed at less trivial code.
+- An out-of-tree module has no symbols until the kernel has actually
+  mapped it into memory — which is why `do_init_module` (or, for modules
+  built with the modern `module_init()` macro, see 02, a different
+  generic hook) is always the first breakpoint, never the module's own
+  init function directly (steps 6–9).
+- `finish`'s reported return value isn't a guess or static analysis —
+  it's GDB reading the actual register (or stack slot, depending on ABI)
+  the real, running function just placed its return value into, at the
+  exact instant it returned (step 10).
+- `init_module` names two different things in this one session: the
+  kernel's own generic function pointer name inside `do_init_module()`,
+  and, only after `lx-symbols`, this module's own function. Every later
+  module in this repo uses `module_init()`/`module_exit()` instead
+  specifically to avoid this ambiguity — see 02's own walkthrough for
+  exactly what that macro changes.

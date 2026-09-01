@@ -9,9 +9,8 @@ order the first time; after that it's a reference you jump back into.
 | Looking for... | Go to |
 |---|---|
 | What a specific module does, how to build/run it | `NN_module_name/readme.md` |
-| A live GDB session walking through that module's code | `NN_module_name/gdb_walkthrough.md` |
+| A live GDB session walking through that module's code, start to finish — tmux, build, boot, breakpoints, cleanup | `NN_module_name/gdb_walkthrough.md` |
 | Every module's run commands in one place, no explanations | [`runbook.md`](runbook.md) |
-| One-time setup for the GDB/QEMU debugging environment | [`gdb_debugging.md`](gdb_debugging.md) |
 | Getting a module onto a real machine — DKMS, signing, upstreaming | [`deployment.md`](deployment.md) |
 
 Each module's directory is self-contained: its own `Makefile` and `.c`
