@@ -1,7 +1,7 @@
 # Runbook: building, running, and reading every module
 
 This is the linear companion to the per-module `readme.md` files: one pass
-through modules 01–16, in order, with the exact commands and — the part
+through modules 01–17, in order, with the exact commands and — the part
 that matters most — what you should actually see happen at each step, so
 you know whether it worked or you're looking at a bug. Each module's own
 `readme.md` has the full explanation and more exercises; this document is
@@ -320,6 +320,26 @@ visibly the same underlying variable (`counter` jumps straight to
 point of this module.
 ```bash
 sudo rmmod debugfs_sysfs
+```
+
+## 17 — advanced_module_params
+
+```bash
+cd 17_advanced_module_params && make
+sudo insmod ./token_bucket.ko
+cat /sys/module/token_bucket/parameters/tokens_available
+echo 30 | sudo tee /sys/module/token_bucket/parameters/capacity
+cat /sys/module/token_bucket/parameters/tokens_available
+echo 500 | sudo tee /sys/module/token_bucket/parameters/refill_rate
+```
+**Look for:** `tokens_available` drops to `30` the instant `capacity` is
+written — no reload, a real side effect from inside the parameter's own
+`.set` callback. The `refill_rate` write then fails outright (`write
+error: Invalid argument`) because `500` exceeds the *current* `capacity`
+— one parameter's write validated against another's live value, not
+module 04's independent, passive parameters.
+```bash
+sudo rmmod token_bucket
 ```
 
 ---
