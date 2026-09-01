@@ -241,9 +241,9 @@ recreating the tmux layout each time (a fresh boot is cheap, a few
 seconds). Only run `tmux kill-session -t kgdb` if you actually want to
 close the whole layout down.
 
-### Three rules that cause real, confusing-looking failures if missed
+### Four rules that cause real, confusing-looking failures if missed
 
-Both were hit for real, live, running exactly this walkthrough:
+All were hit for real, live, running exactly this walkthrough:
 
 1. **`continue` means "go trigger the next thing in the other pane" —
    don't keep typing in `gdb`.** Commands typed into `gdb` right after a
@@ -290,13 +290,44 @@ Both were hit for real, live, running exactly this walkthrough:
    the next line** — never select-and-paste the whole block. The same
    applies to `vmb`: one shell command at a time.
 
+4. **Driving this over `tmux send-keys` (not a human at a keyboard)?
+   `send-keys`'s bare-word arguments aren't always literal text.** `tmux
+   send-keys -t pane 'delete' Enter` does **not** type the four
+   characters `d`,`e`,`l`,`e`,`t`,`e` into `gdb` — `delete` is one of
+   tmux's own recognized key names (the Delete key), so it sends the
+   literal escape sequence `ESC[3~` into the pane instead. Reproduced
+   directly, piping a plain `cat` instead of `gdb` to remove any
+   ambiguity about which program is "wrong":
+   ```
+   $ tmux send-keys -t pane 'cat > out.txt' Enter
+   $ tmux send-keys -t pane 'delete' Enter
+   $ cat -A out.txt
+   ^[[3~$
+   ```
+   Not the text `delete` — the Delete key's escape sequence, nothing
+   else. Landing that inside `gdb` right when the target is also mid-
+   `continue` (rule 1) is what actually caused this repo's one real
+   "tmux looks locked up" incident: the intended `delete` (bare, to
+   clear all breakpoints — see any walkthrough's cleanup step) never
+   reached `gdb` at all, the follow-up `y`/Enter confirmation keystrokes
+   sent right after it just piled into the same still-unprocessed input
+   queue from rule 1, and `Ctrl-C` (rule 2) was needed to get a `(gdb)`
+   prompt back at all — every step of that behaved exactly as documented
+   above, it just looked alarming in combination. **Fix: always pass `-l`
+   (literal) when scripting gdb/shell text through `send-keys`** — `tmux
+   send-keys -l -t pane 'delete'` followed by a separate `tmux send-keys
+   -t pane Enter` sends the real word, confirmed by the same `cat` test
+   above. This has no effect on a human actually typing at the keyboard —
+   only on anything driving these sessions programmatically.
+
 If a session ever gets into a confusing state, `info breakpoints` in
 `gdb` and a fresh `capture-pane`-style look at both panes' actual
 scrollback (not just what's visible right now) will show you exactly
 what's pending — a stuck `Continuing.` with no matching hit means
 something on the guest side was never triggered, or the guest itself is
-still frozen from an earlier interrupt, or (per rule 3) a paste got
-mangled and nothing you think you sent actually ran.
+still frozen from an earlier interrupt, or a paste got mangled (rule 3)
+or a key name got substituted for literal text (rule 4) and nothing you
+think you sent actually ran.
 
 ## Smoke test: verify the whole setup, start to finish
 
